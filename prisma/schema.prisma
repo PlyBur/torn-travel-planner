@@ -1,0 +1,130 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model AppUser {
+  id                  String   @id @default(cuid())
+  createdAt           DateTime @default(now())
+
+  tornPlayerId        Int?     @unique
+  playerName          String?
+  apiKey              String?
+
+  defaultBackfillDays Int      @default(30)
+  defaultBackfillPages Int     @default(25)
+  defaultDelayMs      Int      @default(2500)
+
+  logs                RawLog[]
+  purchases           TravelPurchase[]
+  tradeIncomes        TradeIncome[]
+  tradeActivities     TradeActivity[]
+  syncState           SyncState?
+}
+
+model RawLog {
+  id          String   @id @default(cuid())
+  userId      String
+  createdAt   DateTime @default(now())
+
+  logType     String
+  message     String?
+  amount      Int?
+  timestamp   DateTime?
+
+  user        AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, timestamp])
+}
+
+model TravelPurchase {
+  id            String   @id @default(cuid())
+  userId        String
+  createdAt     DateTime @default(now())
+
+  purchaseDate  String
+  tripLabel     String?
+  country       String?
+
+  itemId        String
+  itemName      String?
+  quantity      Int
+  unitPrice     Int      @default(0)
+  totalCost     Int      @default(0)
+
+  source        String   @default("API_LOG")
+  sourceLogKey  String?
+  notes         String?
+
+  user          AppUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sourceLogKey])
+  @@index([userId, purchaseDate])
+}
+
+model TradeIncome {
+  id           String   @id @default(cuid())
+  userId       String
+  createdAt    DateTime @default(now())
+
+  incomeDate   String
+  amount       Int
+  source       String   @default("API_LOG")
+  sourceLogKey String?
+  description  String?
+
+  user         AppUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sourceLogKey])
+  @@index([userId, incomeDate])
+}
+
+model TradeActivity {
+  id           String   @id @default(cuid())
+  userId       String
+  createdAt    DateTime @default(now())
+
+  activityDate String
+  logType      Int
+  tradeStatus  String
+  direction    String?
+  description  String?
+  traderName   String?
+  traderId     String?
+  tradeId      String?
+  amount       Int?
+  source       String   @default("API_LOG")
+  sourceLogKey String?
+  rawData      Json?
+
+  user         AppUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sourceLogKey])
+  @@index([userId, activityDate])
+  @@index([userId, tradeStatus])
+}
+
+model SyncState {
+  id                  String    @id @default(cuid())
+  userId              String?   @unique
+
+  backfillComplete    Boolean   @default(false)
+  backfillFromDate    DateTime?
+  backfillToDate      DateTime?
+  backfillDays        Int       @default(30)
+
+  lastBackfillAt      DateTime?
+  lastLatestUpdateAt  DateTime?
+  backfillScannedLogs Int       @default(0)
+  latestScannedLogs   Int       @default(0)
+
+  currentNetworth     BigInt    @default(0)
+  lastNetworthAt      DateTime?
+
+  updatedAt           DateTime  @updatedAt
+
+  user                AppUser?  @relation(fields: [userId], references: [id], onDelete: Cascade)
+}

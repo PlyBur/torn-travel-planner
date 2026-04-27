@@ -1,65 +1,291 @@
-import Image from "next/image";
+"use client";
+
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+
+function formatMoney(amount?: number | null) {
+  const safeAmount = Number(amount ?? 0);
+  return `$${safeAmount.toLocaleString("en-US")}`;
+}
+
+function buildQueryString(startDate: string, endDate: string) {
+  const params = new URLSearchParams();
+
+  if (startDate) params.set("start", startDate);
+  if (endDate) params.set("end", endDate);
+
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+function isValidDate(value?: string | null) {
+  if (!value) return false;
+  const date = new Date(value);
+  return !Number.isNaN(date.getTime());
+}
+
+function formatDateTime(value?: string | null) {
+  if (!isValidDate(value)) return "Never";
+  return new Date(value as string).toLocaleString();
+}
+
+function formatDate(value?: string | null) {
+  if (!isValidDate(value)) return "-";
+  return new Date(value as string).toISOString().slice(0, 10);
+}
+
+function getAgeText(value?: string | null) {
+  if (!isValidDate(value)) return "Never updated";
+
+  const diffMs = Date.now() - new Date(value as string).getTime();
+  const diffSeconds = Math.max(0, Math.floor(diffMs / 1000));
+  const diffMinutes = Math.floor(diffSeconds / 60);
+  const diffHours = Math.floor(diffMinutes / 60);
+  const diffDays = Math.floor(diffHours / 24);
+
+  if (diffSeconds < 60) return `${diffSeconds}s ago`;
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  return `${diffDays}d ago`;
+}
 
 export default function Home() {
-  return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+  const [data, setData] = useState<any>(null);
+  const [syncingLatest, setSyncingLatest] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [tick, setTick] = useState(0);
+
+  const queryString = useMemo(
+    () => buildQueryString(startDate, endDate),
+    [startDate, endDate]
+  );
+
+  const travelHref = `/travel-purchases${queryString}`;
+  const tradesHref = `/trades${queryString}`;
+  const logbookHref = `/logbook${queryString}`;
+
+  async function loadDashboard() {
+    try {
+      const res = await fetch(`/dashboard-data${queryString}`, {
+        cache: "no-store",
+      });
+      const result = await res.json();
+
+      setData(result);
+
+      if (!result.success) {
+        setMessage(result.error ?? "Failed to load dashboard.");
+      }
+    } catch (err: any) {
+      setMessage(err?.message ?? "Failed to load dashboard.");
+    }
+  }
+
+  async function runLatestUpdate() {
+    setSyncingLatest(true);
+    setMessage("Running latest update...");
+
+    try {
+      const res = await fetch("/test-api", { cache: "no-store" });
+      const result = await res.json();
+
+      if (result.success) {
+        setMessage(
+          `Latest update complete. Scanned ${result.scannedLogs ?? 0} logs.`
+        );
+        await loadDashboard();
+      } else {
+        setMessage(result.error ?? "Latest update failed.");
+      }
+    } catch (err: any) {
+      setMessage(err?.message ?? "Latest update failed.");
+    } finally {
+      setSyncingLatest(false);
+    }
+  }
+
+  function applyDateRange(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    loadDashboard();
+  }
+
+  function clearDateRange() {
+    setStartDate("");
+    setEndDate("");
+  }
+
+  useEffect(() => {
+    loadDashboard();
+  }, []);
+
+  useEffect(() => {
+    const interval = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  if (!data) return <div className="p-10">Loading...</div>;
+
+  if (data.needsSettings) {
+    return (
+      <main className="min-h-screen bg-zinc-950 p-10 text-white">
+        <h1 className="text-3xl font-bold">Torn Ops Intelligence</h1>
+        <p className="mt-3 text-zinc-400">
+          Please configure your API key first.
+        </p>
+
+        <Link
+          href="/settings"
+          className="mt-6 inline-block rounded-lg bg-emerald-600 px-6 py-3 font-semibold"
+        >
+          Open Settings
+        </Link>
       </main>
+    );
+  }
+
+  const financials = data.financials ?? {};
+  const syncState = data.syncState ?? {};
+  const counts = data.counts ?? {};
+
+  return (
+    <main className="min-h-screen bg-zinc-950 p-10 text-white">
+      {/* HEADER */}
+      <div className="mb-8 flex justify-between">
+        <div>
+          <h1 className="text-3xl font-bold">Torn Ops Intelligence</h1>
+          <p className="text-zinc-400 text-sm mt-1">
+            Player: {data.player?.playerName}
+          </p>
+          {message && (
+            <p className="text-zinc-400 text-sm mt-2">{message}</p>
+          )}
+        </div>
+
+        <div className="flex gap-3">
+          <button
+            onClick={runLatestUpdate}
+            disabled={syncingLatest}
+            className="bg-emerald-600 px-5 py-2 rounded-lg font-semibold"
+          >
+            {syncingLatest ? "Updating..." : "Latest Update"}
+          </button>
+
+          <Link href="/daily-activity" className="btn">
+            Daily Activity
+          </Link>
+
+          <Link href={travelHref} className="btn">
+            Travel
+          </Link>
+          <Link href={tradesHref} className="btn">
+            Trades
+          </Link>
+          <Link href={logbookHref} className="btn">
+            Logbook
+          </Link>
+          <Link href="/settings" className="btn">
+            Settings
+          </Link>
+        </div>
+      </div>
+
+      {/* STATUS */}
+      <div className="grid grid-cols-4 gap-6 mb-8">
+        <Card
+          title="Data From"
+          value={formatDate(syncState.backfillFromDate)}
+          sub={`Status: ${
+            syncState.backfillComplete ? "Complete" : "Not Complete"
+          }`}
+        />
+
+        <Card
+          title="Latest Update"
+          value={getAgeText(syncState.lastLatestUpdateAt)}
+          sub={`Last: ${formatDateTime(syncState.lastLatestUpdateAt)}`}
+        />
+
+        <Card
+          title="Backfill Logs"
+          value={(syncState.backfillScannedLogs ?? 0).toLocaleString()}
+        />
+
+        <Card
+          title="Latest Logs"
+          value={(syncState.latestScannedLogs ?? 0).toLocaleString()}
+        />
+      </div>
+
+      {/* DATE FILTER */}
+      <form
+        onSubmit={applyDateRange}
+        className="bg-zinc-900 p-5 rounded-xl mb-8 flex gap-4 items-end"
+      >
+        <InputDate label="Start" value={startDate} set={setStartDate} />
+        <InputDate label="End" value={endDate} set={setEndDate} />
+
+        <button className="btn">Apply</button>
+        <button type="button" onClick={clearDateRange} className="btn-outline">
+          Clear
+        </button>
+      </form>
+
+      {/* FINANCIALS */}
+      <div className="grid grid-cols-5 gap-6 mb-10">
+        <Card title="Networth" value={formatMoney(data.currentNetworth)} />
+        <Card title="Trade Income" value={formatMoney(financials.tradeIncome)} />
+        <Card title="Travel Spend" value={formatMoney(financials.travelCost)} />
+        <Card title="Travel Profit" value={formatMoney(financials.travelNet)} />
+        <Card
+          title="Trades"
+          value={(counts.tradeActivities ?? 0).toLocaleString()}
+        />
+      </div>
+    </main>
+  );
+}
+
+/* --- UI HELPERS --- */
+
+function Card({
+  title,
+  value,
+  sub,
+}: {
+  title: string;
+  value: any;
+  sub?: string;
+}) {
+  return (
+    <div className="bg-zinc-900 p-5 rounded-xl">
+      <p className="text-sm text-zinc-400">{title}</p>
+      <p className="text-lg font-bold mt-1">{value}</p>
+      {sub && <p className="text-xs text-zinc-500 mt-1">{sub}</p>}
+    </div>
+  );
+}
+
+function InputDate({
+  label,
+  value,
+  set,
+}: {
+  label: string;
+  value: string;
+  set: (v: string) => void;
+}) {
+  return (
+    <div>
+      <label className="text-sm text-zinc-400 block mb-1">{label}</label>
+      <input
+        type="date"
+        value={value}
+        onChange={(e) => set(e.target.value)}
+        className="bg-black border border-zinc-700 px-3 py-2 rounded-lg"
+      />
     </div>
   );
 }
