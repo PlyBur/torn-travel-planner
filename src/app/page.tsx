@@ -3,9 +3,48 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
+type QuickRange = "day" | "week" | "month" | "custom";
+
 function formatMoney(amount?: number | null) {
   const safeAmount = Number(amount ?? 0);
   return `$${safeAmount.toLocaleString("en-US")}`;
+}
+
+function toDateInputValue(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function todayString() {
+  return toDateInputValue(new Date());
+}
+
+function daysAgoString(daysAgo: number) {
+  const date = new Date();
+  date.setDate(date.getDate() - daysAgo);
+  return toDateInputValue(date);
+}
+
+function getRangeDates(range: QuickRange) {
+  const end = todayString();
+
+  if (range === "week") {
+    return {
+      start: daysAgoString(6),
+      end,
+    };
+  }
+
+  if (range === "month") {
+    return {
+      start: daysAgoString(29),
+      end,
+    };
+  }
+
+  return {
+    start: todayString(),
+    end,
+  };
 }
 
 function buildQueryString(startDate: string, endDate: string) {
@@ -54,24 +93,29 @@ export default function Home() {
   const [syncingLatest, setSyncingLatest] = useState(false);
   const [message, setMessage] = useState("");
 
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
-  const [tick, setTick] = useState(0);
+  const defaultRange = getRangeDates("day");
+
+  const [activeRange, setActiveRange] = useState<QuickRange>("day");
+  const [startDate, setStartDate] = useState(defaultRange.start);
+  const [endDate, setEndDate] = useState(defaultRange.end);
+  const [, setTick] = useState(0);
 
   const queryString = useMemo(
     () => buildQueryString(startDate, endDate),
     [startDate, endDate]
   );
 
+  const dailyActivityHref = `/daily-activity?date=${endDate || todayString()}`;
   const travelHref = `/travel-purchases${queryString}`;
   const tradesHref = `/trades${queryString}`;
   const logbookHref = `/logbook${queryString}`;
 
-  async function loadDashboard() {
+  async function loadDashboard(nextQueryString = queryString) {
     try {
-      const res = await fetch(`/dashboard-data${queryString}`, {
+      const res = await fetch(`/dashboard-data${nextQueryString}`, {
         cache: "no-store",
       });
+
       const result = await res.json();
 
       setData(result);
@@ -107,18 +151,31 @@ export default function Home() {
     }
   }
 
-  function applyDateRange(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    loadDashboard();
+  function applyQuickRange(range: QuickRange) {
+    const nextRange = getRangeDates(range);
+    const nextQueryString = buildQueryString(nextRange.start, nextRange.end);
+
+    setActiveRange(range);
+    setStartDate(nextRange.start);
+    setEndDate(nextRange.end);
+
+    loadDashboard(nextQueryString);
   }
 
-  function clearDateRange() {
-    setStartDate("");
-    setEndDate("");
+  function applyDateRange(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    const nextQueryString = buildQueryString(startDate, endDate);
+
+    setActiveRange("custom");
+    loadDashboard(nextQueryString);
   }
 
   useEffect(() => {
-    loadDashboard();
+    const initialRange = getRangeDates("day");
+    const initialQueryString = buildQueryString(initialRange.start, initialRange.end);
+
+    loadDashboard(initialQueryString);
   }, []);
 
   useEffect(() => {
@@ -152,48 +209,52 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-zinc-950 p-10 text-white">
-      {/* HEADER */}
-      <div className="mb-8 flex justify-between">
+      <div className="mb-8 flex justify-between gap-6">
         <div>
           <h1 className="text-3xl font-bold">Torn Ops Intelligence</h1>
-          <p className="text-zinc-400 text-sm mt-1">
+          <p className="mt-1 text-sm text-zinc-400">
             Player: {data.player?.playerName}
           </p>
+          <p className="mt-1 text-xs text-zinc-500">
+            Showing: {formatDate(startDate)} to {formatDate(endDate)}
+          </p>
           {message && (
-            <p className="text-zinc-400 text-sm mt-2">{message}</p>
+            <p className="mt-2 text-sm text-zinc-400">{message}</p>
           )}
         </div>
 
-        <div className="flex gap-3">
+        <div className="flex flex-wrap justify-end gap-3">
           <button
             onClick={runLatestUpdate}
             disabled={syncingLatest}
-            className="bg-emerald-600 px-5 py-2 rounded-lg font-semibold"
+            className="rounded-lg bg-emerald-600 px-5 py-2 font-semibold disabled:opacity-60"
           >
             {syncingLatest ? "Updating..." : "Latest Update"}
           </button>
 
-          <Link href="/daily-activity" className="btn">
+          <Link href={dailyActivityHref} className="btn">
             Daily Activity
           </Link>
 
           <Link href={travelHref} className="btn">
             Travel
           </Link>
+
           <Link href={tradesHref} className="btn">
             Trades
           </Link>
+
           <Link href={logbookHref} className="btn">
             Logbook
           </Link>
+
           <Link href="/settings" className="btn">
             Settings
           </Link>
         </div>
       </div>
 
-      {/* STATUS */}
-      <div className="grid grid-cols-4 gap-6 mb-8">
+      <div className="mb-8 grid grid-cols-4 gap-6">
         <Card
           title="Data From"
           value={formatDate(syncState.backfillFromDate)}
@@ -219,22 +280,46 @@ export default function Home() {
         />
       </div>
 
-      {/* DATE FILTER */}
-      <form
-        onSubmit={applyDateRange}
-        className="bg-zinc-900 p-5 rounded-xl mb-8 flex gap-4 items-end"
-      >
-        <InputDate label="Start" value={startDate} set={setStartDate} />
-        <InputDate label="End" value={endDate} set={setEndDate} />
+      <div className="mb-8 rounded-xl bg-zinc-900 p-5">
+        <div className="mb-5 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => applyQuickRange("day")}
+            className={activeRange === "day" ? "btn-active" : "btn-outline"}
+          >
+            Day
+          </button>
 
-        <button className="btn">Apply</button>
-        <button type="button" onClick={clearDateRange} className="btn-outline">
-          Clear
-        </button>
-      </form>
+          <button
+            type="button"
+            onClick={() => applyQuickRange("week")}
+            className={activeRange === "week" ? "btn-active" : "btn-outline"}
+          >
+            Week
+          </button>
 
-      {/* FINANCIALS */}
-      <div className="grid grid-cols-5 gap-6 mb-10">
+          <button
+            type="button"
+            onClick={() => applyQuickRange("month")}
+            className={activeRange === "month" ? "btn-active" : "btn-outline"}
+          >
+            Month
+          </button>
+
+          <span className="text-sm text-zinc-500">
+            Use custom range only when you need older or specific data.
+          </span>
+        </div>
+
+        <form onSubmit={applyDateRange} className="flex flex-wrap items-end gap-4">
+          <InputDate label="Custom start" value={startDate} set={setStartDate} />
+          <InputDate label="Custom end" value={endDate} set={setEndDate} />
+
+          <button className="btn">Apply Custom Range</button>
+        </form>
+      </div>
+
+      <div className="mb-10 grid grid-cols-5 gap-6">
         <Card title="Networth" value={formatMoney(data.currentNetworth)} />
         <Card title="Trade Income" value={formatMoney(financials.tradeIncome)} />
         <Card title="Travel Spend" value={formatMoney(financials.travelCost)} />
@@ -248,8 +333,6 @@ export default function Home() {
   );
 }
 
-/* --- UI HELPERS --- */
-
 function Card({
   title,
   value,
@@ -260,10 +343,10 @@ function Card({
   sub?: string;
 }) {
   return (
-    <div className="bg-zinc-900 p-5 rounded-xl">
+    <div className="rounded-xl bg-zinc-900 p-5">
       <p className="text-sm text-zinc-400">{title}</p>
-      <p className="text-lg font-bold mt-1">{value}</p>
-      {sub && <p className="text-xs text-zinc-500 mt-1">{sub}</p>}
+      <p className="mt-1 text-lg font-bold">{value}</p>
+      {sub && <p className="mt-1 text-xs text-zinc-500">{sub}</p>}
     </div>
   );
 }
@@ -279,12 +362,12 @@ function InputDate({
 }) {
   return (
     <div>
-      <label className="text-sm text-zinc-400 block mb-1">{label}</label>
+      <label className="mb-1 block text-sm text-zinc-400">{label}</label>
       <input
         type="date"
         value={value}
         onChange={(e) => set(e.target.value)}
-        className="bg-black border border-zinc-700 px-3 py-2 rounded-lg"
+        className="rounded-lg border border-zinc-700 bg-black px-3 py-2 text-white"
       />
     </div>
   );

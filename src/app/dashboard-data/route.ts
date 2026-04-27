@@ -16,52 +16,42 @@ function serialize(data: any): any {
   return data;
 }
 
-function buildPurchaseDateWhere(
-  userId: string,
-  start?: string | null,
-  end?: string | null
-) {
-  const where: any = { userId };
-
-  if (start || end) {
-    where.purchaseDate = {};
-    if (start) where.purchaseDate.gte = `${start}T00:00:00.000Z`;
-    if (end) where.purchaseDate.lte = `${end}T23:59:59.999Z`;
-  }
-
-  return where;
+function todayString() {
+  return new Date().toISOString().slice(0, 10);
 }
 
-function buildIncomeDateWhere(
-  userId: string,
-  start?: string | null,
-  end?: string | null
-) {
-  const where: any = { userId };
-
-  if (start || end) {
-    where.incomeDate = {};
-    if (start) where.incomeDate.gte = `${start}T00:00:00.000Z`;
-    if (end) where.incomeDate.lte = `${end}T23:59:59.999Z`;
-  }
-
-  return where;
+function daysAgoString(daysAgo: number) {
+  const date = new Date();
+  date.setDate(date.getDate() - daysAgo);
+  return date.toISOString().slice(0, 10);
 }
 
-function buildActivityDateWhere(
-  userId: string,
-  start?: string | null,
-  end?: string | null
-) {
-  const where: any = { userId };
+function getDefaultRange() {
+  return {
+    start: todayString(),
+    end: todayString(),
+  };
+}
 
-  if (start || end) {
-    where.activityDate = {};
-    if (start) where.activityDate.gte = `${start}T00:00:00.000Z`;
-    if (end) where.activityDate.lte = `${end}T23:59:59.999Z`;
+function buildDateRange(start?: string | null, end?: string | null) {
+  if (!start && !end) {
+    return getDefaultRange();
   }
 
-  return where;
+  return {
+    start: start ?? todayString(),
+    end: end ?? todayString(),
+  };
+}
+
+function buildWhere(userId: string, field: string, start: string, end: string) {
+  return {
+    userId,
+    [field]: {
+      gte: `${start}T00:00:00.000Z`,
+      lte: `${end}T23:59:59.999Z`,
+    },
+  };
 }
 
 async function getCurrentNetworth(apiKey: string) {
@@ -84,28 +74,28 @@ export async function GET(request: Request) {
       return NextResponse.json({
         success: false,
         needsSettings: true,
-        error: "No Torn API key configured. Please complete Settings first.",
+        error: "No Torn API key configured.",
       });
     }
 
     const { searchParams } = new URL(request.url);
-    const start = searchParams.get("start");
-    const end = searchParams.get("end");
 
-    const purchases = await prisma.travelPurchase.findMany({
-      where: buildPurchaseDateWhere(user.id, start, end),
-      orderBy: { purchaseDate: "desc" },
-    });
+    const rawStart = searchParams.get("start");
+    const rawEnd = searchParams.get("end");
 
-    const tradeIncomes = await prisma.tradeIncome.findMany({
-      where: buildIncomeDateWhere(user.id, start, end),
-      orderBy: { incomeDate: "desc" },
-    });
+    const { start, end } = buildDateRange(rawStart, rawEnd);
 
-    const tradeActivities = await prisma.tradeActivity.findMany({
-      where: buildActivityDateWhere(user.id, start, end),
-      orderBy: { activityDate: "desc" },
-    });
+    const [purchases, tradeIncomes, tradeActivities] = await Promise.all([
+      prisma.travelPurchase.findMany({
+        where: buildWhere(user.id, "purchaseDate", start, end),
+      }),
+      prisma.tradeIncome.findMany({
+        where: buildWhere(user.id, "incomeDate", start, end),
+      }),
+      prisma.tradeActivity.findMany({
+        where: buildWhere(user.id, "activityDate", start, end),
+      }),
+    ]);
 
     let syncState = await getOrCreateSyncState(user.id);
 
@@ -120,12 +110,12 @@ export async function GET(request: Request) {
     });
 
     const travelCost = purchases.reduce(
-      (sum, purchase) => sum + Number(purchase.totalCost ?? 0),
+      (sum, p) => sum + Number(p.totalCost ?? 0),
       0
     );
 
     const tradeIncome = tradeIncomes.reduce(
-      (sum, income) => sum + Number(income.amount ?? 0),
+      (sum, i) => sum + Number(i.amount ?? 0),
       0
     );
 
@@ -137,13 +127,10 @@ export async function GET(request: Request) {
         player: {
           id: user.id,
           playerName: user.playerName,
-          tornPlayerId: user.tornPlayerId,
         },
         dateRange: { start, end },
         syncState,
         currentNetworth,
-        purchases: purchases.slice(0, 10),
-        tradeActivities: tradeActivities.slice(0, 10),
         financials: {
           travelCost,
           tradeIncome,
