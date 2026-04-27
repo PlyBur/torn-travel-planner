@@ -2,8 +2,6 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getCurrentAppUser } from "@/lib/current-user";
 
-const TORN_API_KEY = process.env.TORN_API_KEY!;
-
 type PageProps = {
   searchParams?: Promise<{
     date?: string;
@@ -67,12 +65,12 @@ function buildDayWhere(userId: string, field: string, selectedDate: string) {
   };
 }
 
-async function getItemNameMap() {
-  if (!TORN_API_KEY) return new Map<string, string>();
+async function getItemNameMap(apiKey?: string | null) {
+  if (!apiKey) return new Map<string, string>();
 
   try {
     const response = await fetch(
-      `https://api.torn.com/torn/?selections=items&key=${TORN_API_KEY}`,
+      `https://api.torn.com/torn/?selections=items&key=${apiKey}`,
       { cache: "no-store" }
     );
 
@@ -289,14 +287,19 @@ function groupTrades(activities: any[], itemNameMap: Map<string, string>) {
       group.tradeName = getTradeName(activity);
     }
 
-    if (activity.tradeStatus === "COMPLETED") group.status = "COMPLETED";
-    else if (activity.tradeStatus === "ACCEPTED" && group.status !== "COMPLETED")
+    if (activity.tradeStatus === "COMPLETED") {
+      group.status = "COMPLETED";
+    } else if (
+      activity.tradeStatus === "ACCEPTED" &&
+      group.status !== "COMPLETED"
+    ) {
       group.status = "ACCEPTED";
-    else if (
+    } else if (
       activity.tradeStatus === "MONEY_INCOMING" &&
       !["COMPLETED", "ACCEPTED"].includes(group.status)
-    )
+    ) {
       group.status = "PAID";
+    }
 
     if (activity.tradeStatus === "MONEY_INCOMING" && activity.amount) {
       group.moneyReceived += Number(activity.amount ?? 0);
@@ -425,7 +428,7 @@ export default async function DailyActivityPage({ searchParams }: PageProps) {
 
   const [itemNameMap, purchases, tradeActivities, tradeIncomes] =
     await Promise.all([
-      getItemNameMap(),
+      getItemNameMap(user.apiKey),
 
       prisma.travelPurchase.findMany({
         where: buildDayWhere(user.id, "purchaseDate", selectedDate),
@@ -508,6 +511,9 @@ export default async function DailyActivityPage({ searchParams }: PageProps) {
           <h1 className="text-3xl font-bold">Daily Activity</h1>
           <p className="mt-2 text-sm text-zinc-400">
             Travel buys, trade sales, cash flow, estimated profit and ROI for one day.
+          </p>
+          <p className="mt-1 text-xs text-zinc-500">
+            Showing data for: {user.playerName ?? "Current player"}
           </p>
         </div>
 
@@ -678,9 +684,13 @@ export default async function DailyActivityPage({ searchParams }: PageProps) {
               <tr key={item.itemId} className="border-t border-zinc-800">
                 <td className="p-3">{item.itemName}</td>
                 <td className="p-3">{item.boughtQty.toLocaleString("en-US")}</td>
-                <td className="p-3">{item.avgBuyPrice ? money(item.avgBuyPrice) : "-"}</td>
+                <td className="p-3">
+                  {item.avgBuyPrice ? money(item.avgBuyPrice) : "-"}
+                </td>
                 <td className="p-3">{item.soldQty.toLocaleString("en-US")}</td>
-                <td className="p-3">{item.avgSellPrice ? money(item.avgSellPrice) : "-"}</td>
+                <td className="p-3">
+                  {item.avgSellPrice ? money(item.avgSellPrice) : "-"}
+                </td>
                 <td
                   className={`p-3 ${
                     item.estimatedProfit >= 0
@@ -791,7 +801,10 @@ export default async function DailyActivityPage({ searchParams }: PageProps) {
                   : null;
 
               return (
-                <tr key={trade.groupKey} className="border-t border-zinc-800 align-top">
+                <tr
+                  key={trade.groupKey}
+                  className="border-t border-zinc-800 align-top"
+                >
                   <td className="p-3">{cleanDateTime(trade.lastDate)}</td>
                   <td className="p-3">
                     {trade.traderName ??
