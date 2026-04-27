@@ -5,26 +5,19 @@ export async function getCurrentAppUser() {
   const cookieStore = await cookies();
   const userId = cookieStore.get("torn_app_user_id")?.value;
 
-  if (userId) {
-    const user = await prisma.appUser.findUnique({
-      where: { id: userId },
-    });
-
-    if (user?.apiKey) return user;
+  if (!userId) {
+    return null;
   }
 
-  const firstUser = await prisma.appUser.findFirst({
-    where: {
-      apiKey: {
-        not: null,
-      },
-    },
-    orderBy: {
-      createdAt: "desc",
-    },
+  const user = await prisma.appUser.findUnique({
+    where: { id: userId },
   });
 
-  return firstUser;
+  if (!user?.apiKey) {
+    return null;
+  }
+
+  return user;
 }
 
 export async function requireCurrentAppUser() {
