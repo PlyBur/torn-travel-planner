@@ -108,7 +108,6 @@ export default function Home() {
   const dailyActivityHref = `/daily-activity?date=${endDate || todayString()}`;
   const travelHref = `/travel-purchases${queryString}`;
   const tradesHref = `/trades${queryString}`;
-  const logbookHref = `/logbook${queryString}`;
 
   async function loadDashboard(nextQueryString = queryString) {
     try {
@@ -235,6 +234,10 @@ export default function Home() {
           <Link href={dailyActivityHref} className="btn">
             Daily Activity
           </Link>
+          
+          <Link href={`/trade-intelligence${queryString}`} className="btn">
+            Trade Intelligence
+          </Link>
 
           <Link href={travelHref} className="btn">
             Travel
@@ -242,10 +245,6 @@ export default function Home() {
 
           <Link href={tradesHref} className="btn">
             Trades
-          </Link>
-
-          <Link href={logbookHref} className="btn">
-            Logbook
           </Link>
 
           <Link href="/settings" className="btn">
