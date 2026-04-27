@@ -1,8 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
-
-const APP_USER_ID = process.env.APP_USER_ID || "default-user";
-const TORN_API_KEY = process.env.TORN_API_KEY!;
+import { getCurrentAppUser } from "@/lib/current-user";
 
 type PageProps = {
   searchParams?: Promise<{
@@ -29,7 +27,6 @@ type TradeGroup = {
   statuses: string[];
   moneyReceived: number;
   itemsOutgoing: TradeItem[];
-  itemsIncoming: TradeItem[];
   events: any[];
 };
 
@@ -42,16 +39,28 @@ function cleanDate(value?: string | null) {
   return value.slice(0, 10);
 }
 
-function buildActivityDateWhere(start?: string, end?: string) {
-  const where: any = {
-    userId: APP_USER_ID,
-  };
+function isValidDate(value?: string | null) {
+  if (!value) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime());
+}
 
-  if (start || end) {
+function buildActivityDateWhere(userId: string, start?: string, end?: string) {
+  const where: any = { userId };
+
+  const hasStart = isValidDate(start);
+  const hasEnd = isValidDate(end);
+
+  if (hasStart || hasEnd) {
     where.activityDate = {};
 
-    if (start) where.activityDate.gte = `${start}T00:00:00.000Z`;
-    if (end) where.activityDate.lte = `${end}T23:59:59.999Z`;
+    if (hasStart) {
+      where.activityDate.gte = `${start}T00:00:00.000Z`;
+    }
+
+    if (hasEnd) {
+      where.activityDate.lte = `${end}T23:59:59.999Z`;
+    }
   }
 
   return where;
@@ -60,18 +69,18 @@ function buildActivityDateWhere(start?: string, end?: string) {
 function buildQueryString(start?: string, end?: string) {
   const params = new URLSearchParams();
 
-  if (start) params.set("start", start);
-  if (end) params.set("end", end);
+  if (isValidDate(start)) params.set("start", start as string);
+  if (isValidDate(end)) params.set("end", end as string);
 
   const query = params.toString();
   return query ? `?${query}` : "";
 }
 
-async function getItemNameMap() {
-  if (!TORN_API_KEY) return new Map<string, string>();
+async function getItemNameMap(apiKey?: string | null) {
+  if (!apiKey) return new Map<string, string>();
 
   try {
-    const url = `https://api.torn.com/torn/?selections=items&key=${TORN_API_KEY}`;
+    const url = `https://api.torn.com/torn/?selections=items&key=${apiKey}`;
     const response = await fetch(url, { cache: "no-store" });
 
     if (!response.ok) return new Map<string, string>();
@@ -92,16 +101,13 @@ async function getItemNameMap() {
   }
 }
 
-async function getTraderNameMap(traderIds: string[]) {
+async function getTraderNameMap(apiKey: string, traderIds: string[]) {
   const map = new Map<string, string>();
-
-  if (!TORN_API_KEY) return map;
-
   const uniqueIds = Array.from(new Set(traderIds.filter(Boolean)));
 
   for (const traderId of uniqueIds) {
     try {
-      const url = `https://api.torn.com/user/${traderId}?selections=basic&key=${TORN_API_KEY}`;
+      const url = `https://api.torn.com/user/${traderId}?selections=basic&key=${apiKey}`;
       const response = await fetch(url, { cache: "no-store" });
 
       if (!response.ok) continue;
@@ -181,7 +187,6 @@ function extractItemsFromRawData(rawData: any, itemNameMap: Map<string, string>)
     data.items,
     data.item,
     data.items_outgoing,
-    data.items_incoming,
     data.trade_items,
     data.inventory,
   ];
@@ -300,7 +305,6 @@ function groupTrades(activities: any[], itemNameMap: Map<string, string>) {
         statuses: [],
         moneyReceived: 0,
         itemsOutgoing: [],
-        itemsIncoming: [],
         events: [],
       });
     }
@@ -343,14 +347,13 @@ function groupTrades(activities: any[], itemNameMap: Map<string, string>) {
       group.moneyReceived += Number(activity.amount ?? 0);
     }
 
-    const extractedItems = extractItemsFromRawData(activity.rawData, itemNameMap);
-
     if (activity.tradeStatus === "ITEMS_OUTGOING") {
-      for (const item of extractedItems) addItem(group.itemsOutgoing, item);
-    }
+      const extractedItems = extractItemsFromRawData(
+        activity.rawData,
+        itemNameMap
+      );
 
-    if (activity.tradeStatus === "ITEMS_INCOMING") {
-      for (const item of extractedItems) addItem(group.itemsIncoming, item);
+      for (const item of extractedItems) addItem(group.itemsOutgoing, item);
     }
   }
 
@@ -436,14 +439,33 @@ export default async function TradesPage({ searchParams }: PageProps) {
   const start = params?.start ?? "";
   const end = params?.end ?? "";
 
+  const user = await getCurrentAppUser();
+
+  if (!user?.apiKey) {
+    return (
+      <main className="min-h-screen bg-zinc-950 p-10 text-white">
+        <h1 className="text-3xl font-bold">Trades</h1>
+        <p className="mt-3 text-zinc-400">
+          Please configure your Torn API key first.
+        </p>
+        <Link
+          href="/settings"
+          className="mt-6 inline-block rounded-lg bg-emerald-600 px-6 py-3 font-semibold"
+        >
+          Open Settings
+        </Link>
+      </main>
+    );
+  }
+
   const [activities, itemNameMap] = await Promise.all([
     prisma.tradeActivity.findMany({
-      where: buildActivityDateWhere(start, end),
+      where: buildActivityDateWhere(user.id, start, end),
       orderBy: {
         activityDate: "desc",
       },
     }),
-    getItemNameMap(),
+    getItemNameMap(user.apiKey),
   ]);
 
   const initialGroups = groupTrades(activities, itemNameMap);
@@ -452,7 +474,7 @@ export default async function TradesPage({ searchParams }: PageProps) {
     .map((trade) => trade.traderId)
     .filter(Boolean) as string[];
 
-  const traderNameMap = await getTraderNameMap(traderIds);
+  const traderNameMap = await getTraderNameMap(user.apiKey, traderIds);
 
   const groupedTrades = initialGroups.map((trade) => ({
     ...trade,
@@ -489,6 +511,9 @@ export default async function TradesPage({ searchParams }: PageProps) {
           <p className="mt-2 text-sm text-zinc-400">
             One row per trade, showing trader, trade name, items and money received.
           </p>
+          <p className="mt-1 text-xs text-zinc-500">
+            Showing data for: {user.playerName ?? "Current player"}
+          </p>
         </div>
 
         <div className="flex gap-3">
@@ -521,7 +546,7 @@ export default async function TradesPage({ searchParams }: PageProps) {
             <input
               type="date"
               name="start"
-              defaultValue={start}
+              defaultValue={isValidDate(start) ? start : ""}
               className="rounded-lg border border-zinc-700 bg-black px-4 py-3 text-white"
             />
           </div>
@@ -531,7 +556,7 @@ export default async function TradesPage({ searchParams }: PageProps) {
             <input
               type="date"
               name="end"
-              defaultValue={end}
+              defaultValue={isValidDate(end) ? end : ""}
               className="rounded-lg border border-zinc-700 bg-black px-4 py-3 text-white"
             />
           </div>
@@ -547,7 +572,7 @@ export default async function TradesPage({ searchParams }: PageProps) {
             href="/trades"
             className="rounded-lg border border-zinc-700 px-5 py-3 text-sm font-semibold hover:bg-zinc-800"
           >
-            Clear
+            Show All
           </Link>
         </div>
       </form>
@@ -650,7 +675,7 @@ export default async function TradesPage({ searchParams }: PageProps) {
             {groupedTrades.length === 0 && (
               <tr>
                 <td colSpan={8} className="p-8 text-center text-zinc-400">
-                  No grouped trades found. Run the 7-day backfill again.
+                  No grouped trades found for this player/date range.
                 </td>
               </tr>
             )}

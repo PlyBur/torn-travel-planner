@@ -1,8 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
-
-const APP_USER_ID = process.env.APP_USER_ID || "default-user";
-const TORN_API_KEY = process.env.TORN_API_KEY!;
+import { getCurrentAppUser } from "@/lib/current-user";
 
 type PageProps = {
   searchParams?: Promise<{
@@ -20,16 +18,28 @@ function cleanDate(value?: string | null) {
   return value.slice(0, 10);
 }
 
-function buildDateWhere(start?: string, end?: string) {
-  const where: any = {
-    userId: APP_USER_ID,
-  };
+function isValidDate(value?: string | null) {
+  if (!value) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime());
+}
 
-  if (start || end) {
+function buildDateWhere(userId: string, start?: string, end?: string) {
+  const where: any = { userId };
+
+  const hasStart = isValidDate(start);
+  const hasEnd = isValidDate(end);
+
+  if (hasStart || hasEnd) {
     where.purchaseDate = {};
 
-    if (start) where.purchaseDate.gte = `${start}T00:00:00.000Z`;
-    if (end) where.purchaseDate.lte = `${end}T23:59:59.999Z`;
+    if (hasStart) {
+      where.purchaseDate.gte = `${start}T00:00:00.000Z`;
+    }
+
+    if (hasEnd) {
+      where.purchaseDate.lte = `${end}T23:59:59.999Z`;
+    }
   }
 
   return where;
@@ -38,18 +48,18 @@ function buildDateWhere(start?: string, end?: string) {
 function buildQueryString(start?: string, end?: string) {
   const params = new URLSearchParams();
 
-  if (start) params.set("start", start);
-  if (end) params.set("end", end);
+  if (isValidDate(start)) params.set("start", start as string);
+  if (isValidDate(end)) params.set("end", end as string);
 
   const query = params.toString();
   return query ? `?${query}` : "";
 }
 
-async function getItemNameMap() {
-  if (!TORN_API_KEY) return new Map<string, string>();
+async function getItemNameMap(apiKey?: string | null) {
+  if (!apiKey) return new Map<string, string>();
 
   try {
-    const url = `https://api.torn.com/torn/?selections=items&key=${TORN_API_KEY}`;
+    const url = `https://api.torn.com/torn/?selections=items&key=${apiKey}`;
 
     const response = await fetch(url, {
       cache: "no-store",
@@ -79,14 +89,33 @@ export default async function TravelPurchasesPage({ searchParams }: PageProps) {
   const start = params?.start ?? "";
   const end = params?.end ?? "";
 
+  const user = await getCurrentAppUser();
+
+  if (!user?.apiKey) {
+    return (
+      <main className="min-h-screen bg-zinc-950 p-10 text-white">
+        <h1 className="text-3xl font-bold">Travel Purchases</h1>
+        <p className="mt-3 text-zinc-400">
+          Please configure your Torn API key first.
+        </p>
+        <Link
+          href="/settings"
+          className="mt-6 inline-block rounded-lg bg-emerald-600 px-6 py-3 font-semibold"
+        >
+          Open Settings
+        </Link>
+      </main>
+    );
+  }
+
   const [purchases, itemNameMap] = await Promise.all([
     prisma.travelPurchase.findMany({
-      where: buildDateWhere(start, end),
+      where: buildDateWhere(user.id, start, end),
       orderBy: {
         purchaseDate: "desc",
       },
     }),
-    getItemNameMap(),
+    getItemNameMap(user.apiKey),
   ]);
 
   const totalItems = purchases.reduce(
@@ -108,6 +137,9 @@ export default async function TravelPurchasesPage({ searchParams }: PageProps) {
           <h1 className="text-3xl font-bold">Travel Purchases</h1>
           <p className="mt-2 text-sm text-zinc-400">
             Abroad item purchases filtered from Torn log type 4201.
+          </p>
+          <p className="mt-1 text-xs text-zinc-500">
+            Showing data for: {user.playerName ?? "Current player"}
           </p>
         </div>
 
@@ -148,7 +180,7 @@ export default async function TravelPurchasesPage({ searchParams }: PageProps) {
             <input
               type="date"
               name="start"
-              defaultValue={start}
+              defaultValue={isValidDate(start) ? start : ""}
               className="rounded-lg border border-zinc-700 bg-black px-4 py-3 text-white"
             />
           </div>
@@ -158,7 +190,7 @@ export default async function TravelPurchasesPage({ searchParams }: PageProps) {
             <input
               type="date"
               name="end"
-              defaultValue={end}
+              defaultValue={isValidDate(end) ? end : ""}
               className="rounded-lg border border-zinc-700 bg-black px-4 py-3 text-white"
             />
           </div>
@@ -174,7 +206,7 @@ export default async function TravelPurchasesPage({ searchParams }: PageProps) {
             href="/travel-purchases"
             className="rounded-lg border border-zinc-700 px-5 py-3 text-sm font-semibold hover:bg-zinc-800"
           >
-            Clear
+            Show All
           </Link>
         </div>
       </form>
@@ -241,7 +273,7 @@ export default async function TravelPurchasesPage({ searchParams }: PageProps) {
             {purchases.length === 0 && (
               <tr>
                 <td colSpan={8} className="p-8 text-center text-zinc-400">
-                  No travel purchases found.
+                  No travel purchases found for this player/date range.
                 </td>
               </tr>
             )}
