@@ -1,6 +1,12 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getCurrentAppUser } from "@/lib/current-user";
+import {
+  getItemNameMap,
+  getPlayerNameMap,
+  resolveItemName,
+  resolvePlayerName,
+} from "@/lib/torn-lookups";
 
 type PageProps = {
   searchParams?: Promise<{
@@ -54,13 +60,8 @@ function buildActivityDateWhere(userId: string, start?: string, end?: string) {
   if (hasStart || hasEnd) {
     where.activityDate = {};
 
-    if (hasStart) {
-      where.activityDate.gte = `${start}T00:00:00.000Z`;
-    }
-
-    if (hasEnd) {
-      where.activityDate.lte = `${end}T23:59:59.999Z`;
-    }
+    if (hasStart) where.activityDate.gte = `${start}T00:00:00.000Z`;
+    if (hasEnd) where.activityDate.lte = `${end}T23:59:59.999Z`;
   }
 
   return where;
@@ -74,57 +75,6 @@ function buildQueryString(start?: string, end?: string) {
 
   const query = params.toString();
   return query ? `?${query}` : "";
-}
-
-async function getItemNameMap(apiKey?: string | null) {
-  if (!apiKey) return new Map<string, string>();
-
-  try {
-    const url = `https://api.torn.com/torn/?selections=items&key=${apiKey}`;
-    const response = await fetch(url, { cache: "no-store" });
-
-    if (!response.ok) return new Map<string, string>();
-
-    const data = await response.json();
-
-    if (data.error || !data.items) return new Map<string, string>();
-
-    const map = new Map<string, string>();
-
-    for (const [id, item] of Object.entries<any>(data.items)) {
-      map.set(String(id), item.name ?? `Item ${id}`);
-    }
-
-    return map;
-  } catch {
-    return new Map<string, string>();
-  }
-}
-
-async function getTraderNameMap(apiKey: string, traderIds: string[]) {
-  const map = new Map<string, string>();
-  const uniqueIds = Array.from(new Set(traderIds.filter(Boolean)));
-
-  for (const traderId of uniqueIds) {
-    try {
-      const url = `https://api.torn.com/user/${traderId}?selections=basic&key=${apiKey}`;
-      const response = await fetch(url, { cache: "no-store" });
-
-      if (!response.ok) continue;
-
-      const data = await response.json();
-
-      if (data.error) continue;
-
-      if (data.name) {
-        map.set(traderId, String(data.name));
-      }
-    } catch {
-      continue;
-    }
-  }
-
-  return map;
 }
 
 function addItem(items: TradeItem[], item: TradeItem) {
@@ -150,11 +100,13 @@ function extractItemsFromRawData(rawData: any, itemNameMap: Map<string, string>)
 
     if (typeof item === "number" || typeof item === "string") {
       const itemId = String(item);
+
       addItem(found, {
         itemId,
-        itemName: itemNameMap.get(itemId) ?? null,
+        itemName: resolveItemName(itemId, null, itemNameMap),
         quantity: 1,
       });
+
       return;
     }
 
@@ -167,20 +119,20 @@ function extractItemsFromRawData(rawData: any, itemNameMap: Map<string, string>)
       item.type ??
       null;
 
+    if (itemId === null || itemId === undefined) return;
+
+    const cleanItemId = String(itemId);
+
     const itemName =
       item.name ?? item.item_name ?? item.itemName ?? item.title ?? null;
 
     const quantity = Number(item.quantity ?? item.qty ?? item.amount ?? 1);
 
-    if (itemId !== null && itemId !== undefined) {
-      const cleanItemId = String(itemId);
-
-      addItem(found, {
-        itemId: cleanItemId,
-        itemName: itemName?.toString() ?? itemNameMap.get(cleanItemId) ?? null,
-        quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
-      });
-    }
+    addItem(found, {
+      itemId: cleanItemId,
+      itemName: resolveItemName(cleanItemId, itemName, itemNameMap),
+      quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+    });
   }
 
   const possibleCollections = [
@@ -210,7 +162,11 @@ function extractItemsFromRawData(rawData: any, itemNameMap: Map<string, string>)
 
     addItem(found, {
       itemId,
-      itemName: data.item_name ?? data.name ?? itemNameMap.get(itemId) ?? null,
+      itemName: resolveItemName(
+        itemId,
+        data.item_name ?? data.name ?? null,
+        itemNameMap
+      ),
       quantity: Number(data.quantity ?? data.qty ?? 1),
     });
   }
@@ -396,24 +352,9 @@ function getAveragePricePerItem(trade: TradeGroup) {
   return Math.round(trade.moneyReceived / totalItems);
 }
 
-function getTraderDisplayName(
-  trade: TradeGroup,
-  traderNameMap: Map<string, string>
-) {
-  if (trade.traderName) return trade.traderName;
-
-  if (trade.traderId && traderNameMap.has(trade.traderId)) {
-    return traderNameMap.get(trade.traderId)!;
-  }
-
-  if (trade.traderId) return `Unknown Trader (${trade.traderId})`;
-
-  return "Unknown Trader";
-}
-
 function getCompletedTradesPerTrader(
   groupedTrades: TradeGroup[],
-  traderNameMap: Map<string, string>
+  playerNameMap: Map<string, string>
 ) {
   const counts = new Map<string, number>();
 
@@ -425,7 +366,7 @@ function getCompletedTradesPerTrader(
     const traderKey =
       trade.traderId ??
       trade.traderName ??
-      getTraderDisplayName(trade, traderNameMap);
+      resolvePlayerName(trade.traderId, trade.traderName, playerNameMap);
 
     counts.set(traderKey, (counts.get(traderKey) ?? 0) + 1);
   }
@@ -468,24 +409,17 @@ export default async function TradesPage({ searchParams }: PageProps) {
     getItemNameMap(user.apiKey),
   ]);
 
-  const initialGroups = groupTrades(activities, itemNameMap);
+  const groupedTrades = groupTrades(activities, itemNameMap);
 
-  const traderIds = initialGroups
+  const traderIds = groupedTrades
     .map((trade) => trade.traderId)
     .filter(Boolean) as string[];
 
-  const traderNameMap = await getTraderNameMap(user.apiKey, traderIds);
-
-  const groupedTrades = initialGroups.map((trade) => ({
-    ...trade,
-    traderName:
-      trade.traderName ??
-      (trade.traderId ? traderNameMap.get(trade.traderId) ?? null : null),
-  }));
+  const playerNameMap = await getPlayerNameMap(user.apiKey, traderIds);
 
   const completedPerTrader = getCompletedTradesPerTrader(
     groupedTrades,
-    traderNameMap
+    playerNameMap
   );
 
   const totalMoneyReceived = groupedTrades.reduce(
@@ -624,9 +558,10 @@ export default async function TradesPage({ searchParams }: PageProps) {
 
           <tbody>
             {groupedTrades.map((trade) => {
-              const traderDisplayName = getTraderDisplayName(
-                trade,
-                traderNameMap
+              const traderDisplayName = resolvePlayerName(
+                trade.traderId,
+                trade.traderName,
+                playerNameMap
               );
 
               const traderKey =

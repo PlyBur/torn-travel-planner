@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getCurrentAppUser } from "@/lib/current-user";
+import { getItemNameMap, resolveItemName } from "@/lib/torn-lookups";
 
 type PageProps = {
   searchParams?: Promise<{
@@ -53,34 +54,6 @@ function buildQueryString(start?: string, end?: string) {
 
   const query = params.toString();
   return query ? `?${query}` : "";
-}
-
-async function getItemNameMap(apiKey?: string | null) {
-  if (!apiKey) return new Map<string, string>();
-
-  try {
-    const url = `https://api.torn.com/torn/?selections=items&key=${apiKey}`;
-
-    const response = await fetch(url, {
-      cache: "no-store",
-    });
-
-    if (!response.ok) return new Map<string, string>();
-
-    const data = await response.json();
-
-    if (data.error || !data.items) return new Map<string, string>();
-
-    const map = new Map<string, string>();
-
-    for (const [id, item] of Object.entries<any>(data.items)) {
-      map.set(String(id), item.name ?? `Item ${id}`);
-    }
-
-    return map;
-  } catch {
-    return new Map<string, string>();
-  }
 }
 
 export default async function TravelPurchasesPage({ searchParams }: PageProps) {
@@ -249,10 +222,11 @@ export default async function TravelPurchasesPage({ searchParams }: PageProps) {
 
           <tbody>
             {purchases.map((purchase) => {
-              const itemName =
-                purchase.itemName ??
-                itemNameMap.get(String(purchase.itemId)) ??
-                `Item ${purchase.itemId}`;
+              const itemName = resolveItemName(
+                purchase.itemId,
+                purchase.itemName,
+                itemNameMap
+              );
 
               return (
                 <tr key={purchase.id} className="border-t border-zinc-800">

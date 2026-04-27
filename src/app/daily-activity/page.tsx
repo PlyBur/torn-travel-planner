@@ -1,6 +1,12 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getCurrentAppUser } from "@/lib/current-user";
+import {
+  getItemNameMap,
+  getPlayerNameMap,
+  resolveItemName,
+  resolvePlayerName,
+} from "@/lib/torn-lookups";
 
 type PageProps = {
   searchParams?: Promise<{
@@ -65,33 +71,6 @@ function buildDayWhere(userId: string, field: string, selectedDate: string) {
   };
 }
 
-async function getItemNameMap(apiKey?: string | null) {
-  if (!apiKey) return new Map<string, string>();
-
-  try {
-    const response = await fetch(
-      `https://api.torn.com/torn/?selections=items&key=${apiKey}`,
-      { cache: "no-store" }
-    );
-
-    if (!response.ok) return new Map<string, string>();
-
-    const data = await response.json();
-
-    if (data.error || !data.items) return new Map<string, string>();
-
-    const map = new Map<string, string>();
-
-    for (const [id, item] of Object.entries<any>(data.items)) {
-      map.set(String(id), item.name ?? `Item ${id}`);
-    }
-
-    return map;
-  } catch {
-    return new Map<string, string>();
-  }
-}
-
 function addItem(items: TradeItem[], item: TradeItem) {
   const existing = items.find(
     (current) =>
@@ -118,7 +97,7 @@ function extractItems(rawData: any, itemNameMap: Map<string, string>) {
 
       addItem(found, {
         itemId,
-        itemName: itemNameMap.get(itemId) ?? null,
+        itemName: resolveItemName(itemId, null, itemNameMap),
         quantity: 1,
       });
 
@@ -137,17 +116,15 @@ function extractItems(rawData: any, itemNameMap: Map<string, string>) {
     if (itemId === null || itemId === undefined) return;
 
     const cleanItemId = String(itemId);
+
     const quantity = Number(item.quantity ?? item.qty ?? item.amount ?? 1);
+
+    const itemName =
+      item.name ?? item.item_name ?? item.itemName ?? item.title ?? null;
 
     addItem(found, {
       itemId: cleanItemId,
-      itemName:
-        item.name ??
-        item.item_name ??
-        item.itemName ??
-        item.title ??
-        itemNameMap.get(cleanItemId) ??
-        null,
+      itemName: resolveItemName(cleanItemId, itemName, itemNameMap),
       quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
     });
   }
@@ -176,7 +153,11 @@ function extractItems(rawData: any, itemNameMap: Map<string, string>) {
 
     addItem(found, {
       itemId,
-      itemName: data.item_name ?? data.name ?? itemNameMap.get(itemId) ?? null,
+      itemName: resolveItemName(
+        itemId,
+        data.item_name ?? data.name ?? null,
+        itemNameMap
+      ),
       quantity: Number(data.quantity ?? data.qty ?? 1),
     });
   }
@@ -338,7 +319,7 @@ function buildItemPerformance(
     if (!performance.has(itemId)) {
       performance.set(itemId, {
         itemId,
-        itemName: itemNameMap.get(itemId) ?? `Item ${itemId}`,
+        itemName: resolveItemName(itemId, null, itemNameMap),
         boughtQty: 0,
         boughtCost: 0,
         soldQty: 0,
@@ -357,6 +338,7 @@ function buildItemPerformance(
     const itemId = String(purchase.itemId);
     const item = ensureItem(itemId);
 
+    item.itemName = resolveItemName(itemId, purchase.itemName, itemNameMap);
     item.boughtQty += Number(purchase.quantity ?? 0);
     item.boughtCost += Number(purchase.totalCost ?? 0);
   }
@@ -376,6 +358,11 @@ function buildItemPerformance(
         (itemQty / totalItemsInTrade) * trade.moneyReceived
       );
 
+      item.itemName = resolveItemName(
+        soldItem.itemId,
+        soldItem.itemName,
+        itemNameMap
+      );
       item.soldQty += itemQty;
       item.soldIncome += incomeShare;
     }
@@ -453,6 +440,13 @@ export default async function DailyActivityPage({ searchParams }: PageProps) {
     ]);
 
   const groupedTrades = groupTrades(tradeActivities, itemNameMap);
+
+  const traderIds = groupedTrades
+    .map((trade) => trade.traderId)
+    .filter(Boolean) as string[];
+
+  const playerNameMap = await getPlayerNameMap(user.apiKey, traderIds);
+
   const itemPerformance = buildItemPerformance(
     purchases,
     groupedTrades,
@@ -641,9 +635,11 @@ export default async function DailyActivityPage({ searchParams }: PageProps) {
           <p className="text-sm text-zinc-400">Best Trade</p>
           <p className="mt-2 text-lg font-bold">
             {bestTrade
-              ? `${bestTrade.traderName ?? bestTrade.traderId ?? "Unknown"} — ${money(
-                  bestTrade.moneyReceived
-                )}`
+              ? `${resolvePlayerName(
+                  bestTrade.traderId,
+                  bestTrade.traderName,
+                  playerNameMap
+                )} — ${money(bestTrade.moneyReceived)}`
               : "-"}
           </p>
         </div>
@@ -740,10 +736,11 @@ export default async function DailyActivityPage({ searchParams }: PageProps) {
 
           <tbody>
             {purchases.map((purchase) => {
-              const itemName =
-                purchase.itemName ??
-                itemNameMap.get(String(purchase.itemId)) ??
-                `Item ${purchase.itemId}`;
+              const itemName = resolveItemName(
+                purchase.itemId,
+                purchase.itemName,
+                itemNameMap
+              );
 
               return (
                 <tr key={purchase.id} className="border-t border-zinc-800">
@@ -800,16 +797,19 @@ export default async function DailyActivityPage({ searchParams }: PageProps) {
                   ? Math.round(trade.moneyReceived / totalItems)
                   : null;
 
+              const traderName = resolvePlayerName(
+                trade.traderId,
+                trade.traderName,
+                playerNameMap
+              );
+
               return (
                 <tr
                   key={trade.groupKey}
                   className="border-t border-zinc-800 align-top"
                 >
                   <td className="p-3">{cleanDateTime(trade.lastDate)}</td>
-                  <td className="p-3">
-                    {trade.traderName ??
-                      (trade.traderId ? `Trader ${trade.traderId}` : "-")}
-                  </td>
+                  <td className="p-3">{traderName}</td>
                   <td className="p-3">{trade.tradeName ?? trade.groupKey}</td>
                   <td className="p-3">{trade.status}</td>
                   <td className="max-w-md p-3 text-zinc-300">
