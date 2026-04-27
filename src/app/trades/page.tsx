@@ -15,6 +15,8 @@ type PageProps = {
   }>;
 };
 
+type QuickRange = "day" | "week" | "month";
+
 type TradeItem = {
   itemId: string;
   itemName: string | null;
@@ -40,9 +42,28 @@ function money(value?: number | null) {
   return `$${Number(value ?? 0).toLocaleString("en-US")}`;
 }
 
-function cleanDate(value?: string | null) {
-  if (!value) return "-";
-  return value.slice(0, 10);
+function todayString() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function daysAgoString(daysAgo: number) {
+  const date = new Date();
+  date.setDate(date.getDate() - daysAgo);
+  return date.toISOString().slice(0, 10);
+}
+
+function getRangeDates(range: QuickRange) {
+  const end = todayString();
+
+  if (range === "week") {
+    return { start: daysAgoString(6), end };
+  }
+
+  if (range === "month") {
+    return { start: daysAgoString(29), end };
+  }
+
+  return { start: todayString(), end };
 }
 
 function isValidDate(value?: string | null) {
@@ -51,30 +72,47 @@ function isValidDate(value?: string | null) {
   return !Number.isNaN(date.getTime());
 }
 
-function buildActivityDateWhere(userId: string, start?: string, end?: string) {
-  const where: any = { userId };
+function getEffectiveDateRange(start?: string, end?: string) {
+  const defaultRange = getRangeDates("day");
 
-  const hasStart = isValidDate(start);
-  const hasEnd = isValidDate(end);
-
-  if (hasStart || hasEnd) {
-    where.activityDate = {};
-
-    if (hasStart) where.activityDate.gte = `${start}T00:00:00.000Z`;
-    if (hasEnd) where.activityDate.lte = `${end}T23:59:59.999Z`;
-  }
-
-  return where;
+  return {
+    start: isValidDate(start) ? (start as string) : defaultRange.start,
+    end: isValidDate(end) ? (end as string) : defaultRange.end,
+  };
 }
 
-function buildQueryString(start?: string, end?: string) {
+function buildActivityDateWhere(userId: string, start: string, end: string) {
+  return {
+    userId,
+    activityDate: {
+      gte: `${start}T00:00:00.000Z`,
+      lte: `${end}T23:59:59.999Z`,
+    },
+  };
+}
+
+function buildQueryString(start: string, end: string) {
   const params = new URLSearchParams();
 
-  if (isValidDate(start)) params.set("start", start as string);
-  if (isValidDate(end)) params.set("end", end as string);
+  params.set("start", start);
+  params.set("end", end);
 
-  const query = params.toString();
-  return query ? `?${query}` : "";
+  return `?${params.toString()}`;
+}
+
+function cleanDate(value?: string | null) {
+  if (!value) return "-";
+  return value.slice(0, 10);
+}
+
+function quickRangeHref(range: QuickRange) {
+  const dates = getRangeDates(range);
+  return `/trades${buildQueryString(dates.start, dates.end)}`;
+}
+
+function isActiveRange(start: string, end: string, range: QuickRange) {
+  const dates = getRangeDates(range);
+  return start === dates.start && end === dates.end;
 }
 
 function addItem(items: TradeItem[], item: TradeItem) {
@@ -377,8 +415,7 @@ function getCompletedTradesPerTrader(
 export default async function TradesPage({ searchParams }: PageProps) {
   const params = await searchParams;
 
-  const start = params?.start ?? "";
-  const end = params?.end ?? "";
+  const { start, end } = getEffectiveDateRange(params?.start, params?.end);
 
   const user = await getCurrentAppUser();
 
@@ -443,14 +480,18 @@ export default async function TradesPage({ searchParams }: PageProps) {
         <div>
           <h1 className="text-3xl font-bold">Trades</h1>
           <p className="mt-2 text-sm text-zinc-400">
-            One row per trade, showing trader, trade name, items and money received.
+            One row per trade, showing trader, trade name, items and money
+            received.
           </p>
           <p className="mt-1 text-xs text-zinc-500">
             Showing data for: {user.playerName ?? "Current player"}
           </p>
+          <p className="mt-1 text-xs text-zinc-500">
+            Range: {start} to {end}
+          </p>
         </div>
 
-        <div className="flex gap-3">
+        <div className="flex flex-wrap justify-end gap-3">
           <Link
             href={`/${queryString}`}
             className="rounded-lg border border-zinc-700 px-5 py-2 text-sm font-semibold hover:bg-zinc-900"
@@ -459,38 +500,93 @@ export default async function TradesPage({ searchParams }: PageProps) {
           </Link>
 
           <Link
+            href={`/daily-activity?date=${end}`}
+            className="rounded-lg border border-zinc-700 px-5 py-2 text-sm font-semibold hover:bg-zinc-900"
+          >
+            Daily Activity
+          </Link>
+
+          <Link
             href={`/travel-purchases${queryString}`}
             className="rounded-lg border border-zinc-700 px-5 py-2 text-sm font-semibold hover:bg-zinc-900"
           >
             Travel Purchases
           </Link>
+
+          <Link
+            href={`/logbook${queryString}`}
+            className="rounded-lg border border-zinc-700 px-5 py-2 text-sm font-semibold hover:bg-zinc-900"
+          >
+            Logbook
+          </Link>
         </div>
       </div>
 
-      <form
-        method="GET"
-        action="/trades"
-        className="mb-8 rounded-xl bg-zinc-900 p-5"
-      >
-        <div className="flex flex-wrap items-end gap-4">
+      <div className="mb-8 rounded-xl bg-zinc-900 p-5">
+        <div className="mb-5 flex flex-wrap items-center gap-3">
+          <Link
+            href={quickRangeHref("day")}
+            className={
+              isActiveRange(start, end, "day")
+                ? "rounded-lg bg-emerald-600 px-5 py-3 text-sm font-semibold"
+                : "rounded-lg border border-zinc-700 px-5 py-3 text-sm font-semibold hover:bg-zinc-800"
+            }
+          >
+            Day
+          </Link>
+
+          <Link
+            href={quickRangeHref("week")}
+            className={
+              isActiveRange(start, end, "week")
+                ? "rounded-lg bg-emerald-600 px-5 py-3 text-sm font-semibold"
+                : "rounded-lg border border-zinc-700 px-5 py-3 text-sm font-semibold hover:bg-zinc-800"
+            }
+          >
+            Week
+          </Link>
+
+          <Link
+            href={quickRangeHref("month")}
+            className={
+              isActiveRange(start, end, "month")
+                ? "rounded-lg bg-emerald-600 px-5 py-3 text-sm font-semibold"
+                : "rounded-lg border border-zinc-700 px-5 py-3 text-sm font-semibold hover:bg-zinc-800"
+            }
+          >
+            Month
+          </Link>
+
+          <span className="text-sm text-zinc-500">
+            Default view is today. Use custom range for older data.
+          </span>
+        </div>
+
+        <form
+          method="GET"
+          action="/trades"
+          className="flex flex-wrap items-end gap-4"
+        >
           <div>
             <label className="mb-2 block text-sm text-zinc-400">
-              Start date
+              Custom start
             </label>
             <input
               type="date"
               name="start"
-              defaultValue={isValidDate(start) ? start : ""}
+              defaultValue={start}
               className="rounded-lg border border-zinc-700 bg-black px-4 py-3 text-white"
             />
           </div>
 
           <div>
-            <label className="mb-2 block text-sm text-zinc-400">End date</label>
+            <label className="mb-2 block text-sm text-zinc-400">
+              Custom end
+            </label>
             <input
               type="date"
               name="end"
-              defaultValue={isValidDate(end) ? end : ""}
+              defaultValue={end}
               className="rounded-lg border border-zinc-700 bg-black px-4 py-3 text-white"
             />
           </div>
@@ -499,17 +595,10 @@ export default async function TradesPage({ searchParams }: PageProps) {
             type="submit"
             className="rounded-lg bg-zinc-700 px-5 py-3 text-sm font-semibold hover:bg-zinc-600"
           >
-            Apply Range
+            Apply Custom Range
           </button>
-
-          <Link
-            href="/trades"
-            className="rounded-lg border border-zinc-700 px-5 py-3 text-sm font-semibold hover:bg-zinc-800"
-          >
-            Show All
-          </Link>
-        </div>
-      </form>
+        </form>
+      </div>
 
       <div className="mb-8 grid gap-6 md:grid-cols-4">
         <div className="rounded-xl bg-zinc-900 p-6">
