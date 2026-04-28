@@ -34,6 +34,7 @@ type TradeGroup = {
 type ItemPerformance = {
   itemId: string;
   itemName: string;
+  country: string | null;
   boughtQty: number;
   boughtCost: number;
   soldQty: number;
@@ -42,6 +43,24 @@ type ItemPerformance = {
   avgSellPrice: number;
   estimatedProfit: number;
   roiPercent: number;
+  profitPerUnit: number;
+  oneWayTravelMinutes: number;
+  returnTravelMinutes: number;
+  profitPerMinute: number;
+};
+
+const COUNTRY_TRAVEL_TIME_ONE_WAY_MINUTES: Record<string, number> = {
+  Mexico: 18,
+  "Cayman Islands": 25,
+  Canada: 29,
+  Hawaii: 94,
+  "United Kingdom": 111,
+  Argentina: 117,
+  Switzerland: 123,
+  Japan: 158,
+  China: 169,
+  UAE: 190,
+  "South Africa": 208,
 };
 
 function money(value?: number | null) {
@@ -116,7 +135,6 @@ function extractItems(rawData: any, itemNameMap: Map<string, string>) {
     if (itemId === null || itemId === undefined) return;
 
     const cleanItemId = String(itemId);
-
     const quantity = Number(item.quantity ?? item.qty ?? item.amount ?? 1);
 
     const itemName =
@@ -320,6 +338,7 @@ function buildItemPerformance(
       performance.set(itemId, {
         itemId,
         itemName: resolveItemName(itemId, null, itemNameMap),
+        country: null,
         boughtQty: 0,
         boughtCost: 0,
         soldQty: 0,
@@ -328,6 +347,10 @@ function buildItemPerformance(
         avgSellPrice: 0,
         estimatedProfit: 0,
         roiPercent: 0,
+        profitPerUnit: 0,
+        oneWayTravelMinutes: 0,
+        returnTravelMinutes: 0,
+        profitPerMinute: 0,
       });
     }
 
@@ -341,6 +364,16 @@ function buildItemPerformance(
     item.itemName = resolveItemName(itemId, purchase.itemName, itemNameMap);
     item.boughtQty += Number(purchase.quantity ?? 0);
     item.boughtCost += Number(purchase.totalCost ?? 0);
+
+    if (!item.country && purchase.country) {
+      item.country = purchase.country;
+    }
+
+    if (item.country) {
+      item.oneWayTravelMinutes =
+        COUNTRY_TRAVEL_TIME_ONE_WAY_MINUTES[item.country] ?? 0;
+      item.returnTravelMinutes = item.oneWayTravelMinutes * 2;
+    }
   }
 
   for (const trade of groupedTrades) {
@@ -382,6 +415,14 @@ function buildItemPerformance(
     item.roiPercent =
       estimatedSoldCost > 0
         ? (item.estimatedProfit / estimatedSoldCost) * 100
+        : 0;
+
+    item.profitPerUnit =
+      item.soldQty > 0 ? Math.round(item.estimatedProfit / item.soldQty) : 0;
+
+    item.profitPerMinute =
+      item.returnTravelMinutes > 0 && item.profitPerUnit !== 0
+        ? item.profitPerUnit / item.returnTravelMinutes
         : 0;
   }
 
@@ -504,7 +545,8 @@ export default async function DailyActivityPage({ searchParams }: PageProps) {
         <div>
           <h1 className="text-3xl font-bold">Daily Activity</h1>
           <p className="mt-2 text-sm text-zinc-400">
-            Travel buys, trade sales, cash flow, estimated profit and ROI for one day.
+            Travel buys, trade sales, cash flow, estimated profit and ROI for
+            one day.
           </p>
           <p className="mt-1 text-xs text-zinc-500">
             Showing data for: {user.playerName ?? "Current player"}
@@ -658,7 +700,8 @@ export default async function DailyActivityPage({ searchParams }: PageProps) {
         <div className="border-b border-zinc-800 p-5">
           <h2 className="text-xl font-semibold">Item Performance</h2>
           <p className="mt-1 text-sm text-zinc-400">
-            Estimated profit uses that day&apos;s average buy price against sold quantity.
+            Estimated profit uses that day&apos;s average buy price against sold
+            quantity. Travel time uses standard return-trip minutes per country.
           </p>
         </div>
 
@@ -666,12 +709,16 @@ export default async function DailyActivityPage({ searchParams }: PageProps) {
           <thead className="bg-zinc-800 text-zinc-400">
             <tr>
               <th className="p-3 text-left">Item</th>
+              <th className="p-3 text-left">Country</th>
               <th className="p-3 text-left">Bought Qty</th>
               <th className="p-3 text-left">Avg Buy</th>
               <th className="p-3 text-left">Sold Qty</th>
               <th className="p-3 text-left">Avg Sell</th>
               <th className="p-3 text-left">Est. Profit</th>
+              <th className="p-3 text-left">Profit / Unit</th>
               <th className="p-3 text-left">ROI</th>
+              <th className="p-3 text-left">Return Travel</th>
+              <th className="p-3 text-left">Profit / Min</th>
             </tr>
           </thead>
 
@@ -679,6 +726,7 @@ export default async function DailyActivityPage({ searchParams }: PageProps) {
             {itemPerformance.map((item) => (
               <tr key={item.itemId} className="border-t border-zinc-800">
                 <td className="p-3">{item.itemName}</td>
+                <td className="p-3">{item.country ?? "-"}</td>
                 <td className="p-3">{item.boughtQty.toLocaleString("en-US")}</td>
                 <td className="p-3">
                   {item.avgBuyPrice ? money(item.avgBuyPrice) : "-"}
@@ -698,17 +746,42 @@ export default async function DailyActivityPage({ searchParams }: PageProps) {
                 </td>
                 <td
                   className={`p-3 ${
+                    item.profitPerUnit >= 0
+                      ? "text-emerald-400"
+                      : "text-red-400"
+                  }`}
+                >
+                  {item.profitPerUnit ? money(item.profitPerUnit) : "-"}
+                </td>
+                <td
+                  className={`p-3 ${
                     item.roiPercent >= 0 ? "text-emerald-400" : "text-red-400"
                   }`}
                 >
                   {percent(item.roiPercent)}
+                </td>
+                <td className="p-3">
+                  {item.returnTravelMinutes
+                    ? `${item.returnTravelMinutes} min`
+                    : "-"}
+                </td>
+                <td
+                  className={`p-3 ${
+                    item.profitPerMinute >= 0
+                      ? "text-emerald-400"
+                      : "text-red-400"
+                  }`}
+                >
+                  {item.profitPerMinute
+                    ? `${money(Math.round(item.profitPerMinute))}/min`
+                    : "-"}
                 </td>
               </tr>
             ))}
 
             {itemPerformance.length === 0 && (
               <tr>
-                <td colSpan={7} className="p-8 text-center text-zinc-400">
+                <td colSpan={11} className="p-8 text-center text-zinc-400">
                   No item performance data for this day.
                 </td>
               </tr>
