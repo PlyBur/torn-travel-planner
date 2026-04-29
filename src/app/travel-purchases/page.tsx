@@ -163,7 +163,7 @@ export default async function TravelPurchasesPage({ searchParams }: PageProps) {
             href={`/daily-activity?date=${end}`}
             className="rounded-lg border border-zinc-700 px-5 py-2 text-sm font-semibold hover:bg-zinc-900"
           >
-            Daily Activity
+            Activity Log
           </Link>
 
           <Link

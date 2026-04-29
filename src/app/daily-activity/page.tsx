@@ -444,7 +444,7 @@ function buildItemPerformance(
 export default async function DailyActivityPage({ searchParams }: PageProps) {
   const params = await searchParams;
   const selectedDate = params?.date ?? todayString();
-const selectedRange = params?.range ?? "day";
+const selectedRange = params?.range ?? "week";
 
 const startDate =
   selectedRange === "week" ? daysAgoString(6) : selectedDate;
@@ -628,9 +628,9 @@ const endDate = selectedDate;
           </button>
 
           <Link
-            href="/daily-activity"
+            href={`/daily-activity?date=${todayString()}&range=day`}
             className="rounded-lg border border-zinc-700 px-5 py-3 text-sm font-semibold hover:bg-zinc-800"
-          >
+          >   
             Today
           </Link>
         </div>
