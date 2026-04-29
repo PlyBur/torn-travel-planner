@@ -11,6 +11,7 @@ import {
 type PageProps = {
   searchParams?: Promise<{
     date?: string;
+    range?: string;
   }>;
 };
 
@@ -74,18 +75,27 @@ function percent(value?: number | null) {
 function todayString() {
   return new Date().toISOString().slice(0, 10);
 }
-
+function daysAgoString(daysAgo: number) {
+  const date = new Date();
+  date.setDate(date.getDate() - daysAgo);
+  return date.toISOString().slice(0, 10);
+}
 function cleanDateTime(value?: string | null) {
   if (!value) return "-";
   return new Date(value).toLocaleString();
 }
 
-function buildDayWhere(userId: string, field: string, selectedDate: string) {
+function buildDateRangeWhere(
+  userId: string,
+  field: string,
+  startDate: string,
+  endDate: string
+) {
   return {
     userId,
     [field]: {
-      gte: `${selectedDate}T00:00:00.000Z`,
-      lte: `${selectedDate}T23:59:59.999Z`,
+      gte: `${startDate}T00:00:00.000Z`,
+      lte: `${endDate}T23:59:59.999Z`,
     },
   };
 }
@@ -421,8 +431,8 @@ function buildItemPerformance(
       item.soldQty > 0 ? Math.round(item.estimatedProfit / item.soldQty) : 0;
 
     item.profitPerMinute =
-      item.returnTravelMinutes > 0 && item.profitPerUnit !== 0
-        ? item.profitPerUnit / item.returnTravelMinutes
+      item.returnTravelMinutes > 0 && item.estimatedProfit !== 0
+        ? item.estimatedProfit / item.returnTravelMinutes
         : 0;
   }
 
@@ -434,6 +444,12 @@ function buildItemPerformance(
 export default async function DailyActivityPage({ searchParams }: PageProps) {
   const params = await searchParams;
   const selectedDate = params?.date ?? todayString();
+const selectedRange = params?.range ?? "day";
+
+const startDate =
+  selectedRange === "week" ? daysAgoString(6) : selectedDate;
+
+const endDate = selectedDate;
 
   const user = await getCurrentAppUser();
 
@@ -459,21 +475,21 @@ export default async function DailyActivityPage({ searchParams }: PageProps) {
       getItemNameMap(user.apiKey),
 
       prisma.travelPurchase.findMany({
-        where: buildDayWhere(user.id, "purchaseDate", selectedDate),
+        where: buildDateRangeWhere(user.id, "purchaseDate", startDate, endDate),
         orderBy: {
           purchaseDate: "asc",
         },
       }),
 
       prisma.tradeActivity.findMany({
-        where: buildDayWhere(user.id, "activityDate", selectedDate),
+        where: buildDateRangeWhere(user.id, "activityDate", startDate, endDate),
         orderBy: {
           activityDate: "asc",
         },
       }),
 
       prisma.tradeIncome.findMany({
-        where: buildDayWhere(user.id, "incomeDate", selectedDate),
+        where: buildDateRangeWhere(user.id, "incomeDate", startDate, endDate),
         orderBy: {
           incomeDate: "asc",
         },
@@ -546,7 +562,7 @@ export default async function DailyActivityPage({ searchParams }: PageProps) {
           <h1 className="text-3xl font-bold">Daily Activity</h1>
           <p className="mt-2 text-sm text-zinc-400">
             Travel buys, trade sales, cash flow, estimated profit and ROI for
-            one day.
+            {selectedRange === "week" ? "the past week." : "one day."}.
           </p>
           <p className="mt-1 text-xs text-zinc-500">
             Showing data for: {user.playerName ?? "Current player"}
@@ -597,6 +613,12 @@ export default async function DailyActivityPage({ searchParams }: PageProps) {
             type="submit"
             className="rounded-lg bg-zinc-700 px-5 py-3 text-sm font-semibold hover:bg-zinc-600"
           >
+            <Link
+              href={`/daily-activity?date=${selectedDate}&range=week`}
+              className="rounded-lg bg-emerald-600 px-5 py-3 text-sm font-semibold hover:bg-emerald-500"
+          >
+            View Week
+          </Link>
             View Day
           </button>
 
