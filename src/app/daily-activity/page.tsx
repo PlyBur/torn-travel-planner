@@ -559,7 +559,7 @@ const endDate = selectedDate;
     <main className="min-h-screen bg-zinc-950 p-10 text-white">
       <div className="mb-8 flex items-start justify-between gap-6">
         <div>
-          <h1 className="text-3xl font-bold">Daily Activity</h1>
+          <h1 className="text-3xl font-bold">Activity log</h1>
           <p className="mt-2 text-sm text-zinc-400">
             Travel buys, trade sales, cash flow, estimated profit and ROI for
             {selectedRange === "week" ? "the past week." : "one day."}.
@@ -614,12 +614,17 @@ const endDate = selectedDate;
             className="rounded-lg bg-zinc-700 px-5 py-3 text-sm font-semibold hover:bg-zinc-600"
           >
             <Link
-              href={`/daily-activity?date=${selectedDate}&range=week`}
-              className="rounded-lg bg-emerald-600 px-5 py-3 text-sm font-semibold hover:bg-emerald-500"
+               href={`/daily-activity?date=${selectedDate}&range=week`}
+               className="rounded-lg border border-zinc-700 px-5 py-3 text-sm font-semibold hover:bg-zinc-800"
           >
-            View Week
-          </Link>
-            View Day
+             View Week
+            </Link>
+          </button>
+          <button
+            type="submit"
+            className="rounded-lg border border-zinc-700 px-5 py-3 text-sm font-semibold hover:bg-zinc-800"
+          >
+             View Day
           </button>
 
           <Link
