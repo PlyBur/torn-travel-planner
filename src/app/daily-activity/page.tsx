@@ -744,8 +744,6 @@ const endDate = selectedDate;
               <th className="p-3 text-left">Est. Profit</th>
               <th className="p-3 text-left">Profit / Unit</th>
               <th className="p-3 text-left">ROI</th>
-              <th className="p-3 text-left">Return Travel</th>
-              <th className="p-3 text-left">Profit / Min</th>
             </tr>
           </thead>
 
@@ -787,28 +785,12 @@ const endDate = selectedDate;
                 >
                   {percent(item.roiPercent)}
                 </td>
-                <td className="p-3">
-                  {item.returnTravelMinutes
-                    ? `${item.returnTravelMinutes} min`
-                    : "-"}
-                </td>
-                <td
-                  className={`p-3 ${
-                    item.profitPerMinute >= 0
-                      ? "text-emerald-400"
-                      : "text-red-400"
-                  }`}
-                >
-                  {item.profitPerMinute
-                    ? `${money(Math.round(item.profitPerMinute))}/min`
-                    : "-"}
-                </td>
               </tr>
             ))}
 
             {itemPerformance.length === 0 && (
               <tr>
-                <td colSpan={11} className="p-8 text-center text-zinc-400">
+                <td colSpan={9} className="p-8 text-center text-zinc-400">
                   No item performance data for this day.
                 </td>
               </tr>
