@@ -1,373 +1,1016 @@
-"use client";
-
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { prisma } from "@/lib/prisma";
+import { getCurrentAppUser, getOrCreateSyncState } from "@/lib/current-user";
+import {
+    getItemNameMap,
+    getPlayerNameMap,
+    resolveItemName,
+    resolvePlayerName,
+} from "@/lib/torn-lookups";
 
-type QuickRange = "day" | "week" | "month" | "custom";
+type PageProps = {
+    searchParams?: Promise<{
+        date?: string;
+        range?: string;
+    }>;
+};
 
-function formatMoney(amount?: number | null) {
-  const safeAmount = Number(amount ?? 0);
-  return `$${safeAmount.toLocaleString("en-US")}`;
+type RangeMode = "day" | "week" | "month";
+
+type TradeItem = {
+    itemId: string;
+    itemName: string | null;
+    quantity: number;
+};
+
+type TradeGroup = {
+    groupKey: string;
+    lastDate: string;
+    traderName: string | null;
+    traderId: string | null;
+    tradeName: string | null;
+    status: string;
+    moneyReceived: number;
+    itemsSent: TradeItem[];
+};
+
+type ItemPerformance = {
+    itemId: string;
+    itemName: string;
+    country: string | null;
+    boughtQty: number;
+    boughtCost: number;
+    soldQty: number;
+    soldIncome: number;
+    avgBuyPrice: number;
+    avgSellPrice: number;
+    estimatedProfit: number;
+    roiPercent: number;
+    profitPerUnit: number;
+};
+
+function money(value?: number | null) {
+    return `$${Number(value ?? 0).toLocaleString("en-US")}`;
 }
 
-function toDateInputValue(date: Date) {
-  return date.toISOString().slice(0, 10);
+function percent(value?: number | null) {
+    return `${Number(value ?? 0).toFixed(1)}%`;
 }
 
 function todayString() {
-  return toDateInputValue(new Date());
+    return new Date().toISOString().slice(0, 10);
 }
 
-function daysAgoString(daysAgo: number) {
-  const date = new Date();
-  date.setDate(date.getDate() - daysAgo);
-  return toDateInputValue(date);
-}
-
-function getRangeDates(range: QuickRange) {
-  const end = todayString();
-
-  if (range === "week") {
-    return {
-      start: daysAgoString(6),
-      end,
-    };
-  }
-
-  if (range === "month") {
-    return {
-      start: daysAgoString(29),
-      end,
-    };
-  }
-
-  return {
-    start: todayString(),
-    end,
-  };
-}
-
-function buildQueryString(startDate: string, endDate: string) {
-  const params = new URLSearchParams();
-
-  if (startDate) params.set("start", startDate);
-  if (endDate) params.set("end", endDate);
-
-  const query = params.toString();
-  return query ? `?${query}` : "";
+function dateMinusDays(baseDate: string, daysAgo: number) {
+    const date = new Date(`${baseDate}T00:00:00.000Z`);
+    date.setUTCDate(date.getUTCDate() - daysAgo);
+    return date.toISOString().slice(0, 10);
 }
 
 function isValidDate(value?: string | null) {
-  if (!value) return false;
-  const date = new Date(value);
-  return !Number.isNaN(date.getTime());
+    if (!value) return false;
+    const date = new Date(`${value}T00:00:00.000Z`);
+    return !Number.isNaN(date.getTime());
 }
 
-function formatDateTime(value?: string | null) {
-  if (!isValidDate(value)) return "Never";
-  return new Date(value as string).toLocaleString();
+function getRangeMode(value?: string | null): RangeMode {
+    if (value === "day" || value === "month") return value;
+    return "week";
 }
 
-function formatDate(value?: string | null) {
-  if (!isValidDate(value)) return "-";
-  return new Date(value as string).toISOString().slice(0, 10);
-}
-
-function getAgeText(value?: string | null) {
-  if (!isValidDate(value)) return "Never updated";
-
-  const diffMs = Date.now() - new Date(value as string).getTime();
-  const diffSeconds = Math.max(0, Math.floor(diffMs / 1000));
-  const diffMinutes = Math.floor(diffSeconds / 60);
-  const diffHours = Math.floor(diffMinutes / 60);
-  const diffDays = Math.floor(diffHours / 24);
-
-  if (diffSeconds < 60) return `${diffSeconds}s ago`;
-  if (diffMinutes < 60) return `${diffMinutes}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  return `${diffDays}d ago`;
-}
-
-export default function Home() {
-  const [data, setData] = useState<any>(null);
-  const [syncingLatest, setSyncingLatest] = useState(false);
-  const [message, setMessage] = useState("");
-
-  const defaultRange = getRangeDates("day");
-
-  const [activeRange, setActiveRange] = useState<QuickRange>("day");
-  const [startDate, setStartDate] = useState(defaultRange.start);
-  const [endDate, setEndDate] = useState(defaultRange.end);
-  const [, setTick] = useState(0);
-
-  const queryString = useMemo(
-    () => buildQueryString(startDate, endDate),
-    [startDate, endDate]
-  );
-
-  const dailyActivityHref = `/daily-activity?date=${endDate || todayString()}`;
-  const travelHref = `/travel-purchases${queryString}`;
-  const tradesHref = `/trades${queryString}`;
-
-  async function loadDashboard(nextQueryString = queryString) {
-    try {
-      const res = await fetch(`/dashboard-data${nextQueryString}`, {
-        cache: "no-store",
-      });
-
-      const result = await res.json();
-
-      setData(result);
-
-      if (!result.success) {
-        setMessage(result.error ?? "Failed to load dashboard.");
-      }
-    } catch (err: any) {
-      setMessage(err?.message ?? "Failed to load dashboard.");
+function getDateRange(selectedDate: string, range: RangeMode) {
+    if (range === "day") {
+        return {
+            startDate: selectedDate,
+            endDate: selectedDate,
+        };
     }
-  }
 
-  async function runLatestUpdate() {
-    setSyncingLatest(true);
-    setMessage("Running latest update...");
-
-    try {
-      const res = await fetch("/test-api", { cache: "no-store" });
-      const result = await res.json();
-
-      if (result.success) {
-        setMessage(
-          `Latest update complete. Scanned ${result.scannedLogs ?? 0} logs.`
-        );
-        await loadDashboard();
-      } else {
-        setMessage(result.error ?? "Latest update failed.");
-      }
-    } catch (err: any) {
-      setMessage(err?.message ?? "Latest update failed.");
-    } finally {
-      setSyncingLatest(false);
+    if (range === "month") {
+        return {
+            startDate: dateMinusDays(selectedDate, 29),
+            endDate: selectedDate,
+        };
     }
-  }
 
-  function applyQuickRange(range: QuickRange) {
-    const nextRange = getRangeDates(range);
-    const nextQueryString = buildQueryString(nextRange.start, nextRange.end);
+    return {
+        startDate: dateMinusDays(selectedDate, 6),
+        endDate: selectedDate,
+    };
+}
 
-    setActiveRange(range);
-    setStartDate(nextRange.start);
-    setEndDate(nextRange.end);
+function buildDateRangeWhere(
+    userId: string,
+    field: string,
+    startDate: string,
+    endDate: string
+) {
+    return {
+        userId,
+        [field]: {
+            gte: `${startDate}T00:00:00.000Z`,
+            lte: `${endDate}T23:59:59.999Z`,
+        },
+    };
+}
 
-    loadDashboard(nextQueryString);
-  }
+function buildQueryString(date: string, range: RangeMode) {
+    const params = new URLSearchParams();
+    params.set("date", date);
+    params.set("range", range);
+    return `?${params.toString()}`;
+}
 
-  function applyDateRange(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
+function buildStartEndQueryString(startDate: string, endDate: string) {
+    const params = new URLSearchParams();
+    params.set("start", startDate);
+    params.set("end", endDate);
+    return `?${params.toString()}`;
+}
 
-    const nextQueryString = buildQueryString(startDate, endDate);
+function cleanDateTime(value?: string | null) {
+    if (!value) return "-";
+    return new Date(value).toLocaleString();
+}
 
-    setActiveRange("custom");
-    loadDashboard(nextQueryString);
-  }
+function cleanDate(value?: string | null) {
+    if (!value) return "-";
+    return value.slice(0, 10);
+}
 
-  useEffect(() => {
-    const initialRange = getRangeDates("day");
-    const initialQueryString = buildQueryString(initialRange.start, initialRange.end);
+function getAgeText(value?: Date | string | null) {
+    if (!value) return "Never updated";
 
-    loadDashboard(initialQueryString);
-  }, []);
+    const date = typeof value === "string" ? new Date(value) : value;
+    const diffMs = Date.now() - date.getTime();
+    const diffSeconds = Math.max(0, Math.floor(diffMs / 1000));
+    const diffMinutes = Math.floor(diffSeconds / 60);
+    const diffHours = Math.floor(diffMinutes / 60);
+    const diffDays = Math.floor(diffHours / 24);
 
-  useEffect(() => {
-    const interval = setInterval(() => setTick((t) => t + 1), 1000);
-    return () => clearInterval(interval);
-  }, []);
+    if (diffSeconds < 60) return `${diffSeconds}s ago`;
+    if (diffMinutes < 60) return `${diffMinutes}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    return `${diffDays}d ago`;
+}
 
-  if (!data) return <div className="p-10">Loading...</div>;
-
-  if (data.needsSettings) {
-    return (
-      <main className="min-h-screen bg-zinc-950 p-10 text-white">
-        <h1 className="text-3xl font-bold">Torn Ops Intelligence</h1>
-        <p className="mt-3 text-zinc-400">
-          Please configure your API key first.
-        </p>
-
-        <Link
-          href="/settings"
-          className="mt-6 inline-block rounded-lg bg-emerald-600 px-6 py-3 font-semibold"
-        >
-          Open Settings
-        </Link>
-      </main>
+function addItem(items: TradeItem[], item: TradeItem) {
+    const existing = items.find(
+        (current) =>
+            current.itemId === item.itemId && current.itemName === item.itemName
     );
-  }
 
-  const financials = data.financials ?? {};
-  const syncState = data.syncState ?? {};
-  const counts = data.counts ?? {};
+    if (existing) {
+        existing.quantity += item.quantity;
+        return;
+    }
 
-  return (
-    <main className="min-h-screen bg-zinc-950 p-10 text-white">
-      <div className="mb-8 flex justify-between gap-6">
-        <div>
-          <h1 className="text-3xl font-bold">Torn Ops Intelligence</h1>
-          <p className="mt-1 text-sm text-zinc-400">
-            Player: {data.player?.playerName}
-          </p>
-          <p className="mt-1 text-xs text-zinc-500">
-            Showing: {formatDate(startDate)} to {formatDate(endDate)}
-          </p>
-          {message && (
-            <p className="mt-2 text-sm text-zinc-400">{message}</p>
-          )}
-        </div>
+    items.push(item);
+}
 
-        <div className="flex flex-wrap justify-end gap-3">
-          <button
-            onClick={runLatestUpdate}
-            disabled={syncingLatest}
-            className="rounded-lg bg-emerald-600 px-5 py-2 font-semibold disabled:opacity-60"
-          >
-            {syncingLatest ? "Updating..." : "Latest Update"}
-          </button>
+function extractItems(rawData: any, itemNameMap: Map<string, string>) {
+    const data = rawData ?? {};
+    const found: TradeItem[] = [];
 
-          <Link href={dailyActivityHref} className="btn">
-            Daily Activity
-          </Link>
-          
-          <Link href={`/trade-intelligence${queryString}`} className="btn">
-            Trade Intelligence
-          </Link>
+    function normaliseItem(item: any) {
+        if (!item) return;
 
-          <Link href={travelHref} className="btn">
-            Travel
-          </Link>
+        if (typeof item === "string" || typeof item === "number") {
+            const itemId = String(item);
 
-          <Link href={tradesHref} className="btn">
-            Trades
-          </Link>
+            addItem(found, {
+                itemId,
+                itemName: resolveItemName(itemId, null, itemNameMap),
+                quantity: 1,
+            });
 
-          <Link href="/settings" className="btn">
-            Settings
-          </Link>
-        </div>
-      </div>
+            return;
+        }
 
-      <div className="mb-8 grid grid-cols-4 gap-6">
-        <Card
-          title="Data From"
-          value={formatDate(syncState.backfillFromDate)}
-          sub={`Status: ${
-            syncState.backfillComplete ? "Complete" : "Not Complete"
-          }`}
-        />
+        const itemId =
+            item.item ??
+            item.item_id ??
+            item.id ??
+            item.itemId ??
+            item.uid ??
+            item.type ??
+            null;
 
-        <Card
-          title="Latest Update"
-          value={getAgeText(syncState.lastLatestUpdateAt)}
-          sub={`Last: ${formatDateTime(syncState.lastLatestUpdateAt)}`}
-        />
+        if (itemId === null || itemId === undefined) return;
 
-        <Card
-          title="Backfill Logs"
-          value={(syncState.backfillScannedLogs ?? 0).toLocaleString()}
-        />
+        const cleanItemId = String(itemId);
+        const quantity = Number(item.quantity ?? item.qty ?? item.amount ?? 1);
 
-        <Card
-          title="Latest Logs"
-          value={(syncState.latestScannedLogs ?? 0).toLocaleString()}
-        />
-      </div>
+        const itemName =
+            item.name ?? item.item_name ?? item.itemName ?? item.title ?? null;
 
-      <div className="mb-8 rounded-xl bg-zinc-900 p-5">
-        <div className="mb-5 flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            onClick={() => applyQuickRange("day")}
-            className={activeRange === "day" ? "btn-active" : "btn-outline"}
-          >
-            Day
-          </button>
+        addItem(found, {
+            itemId: cleanItemId,
+            itemName: resolveItemName(cleanItemId, itemName, itemNameMap),
+            quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+        });
+    }
 
-          <button
-            type="button"
-            onClick={() => applyQuickRange("week")}
-            className={activeRange === "week" ? "btn-active" : "btn-outline"}
-          >
-            Week
-          </button>
+    const collections = [
+        data.items,
+        data.item,
+        data.items_outgoing,
+        data.items_incoming,
+        data.trade_items,
+        data.inventory,
+    ];
 
-          <button
-            type="button"
-            onClick={() => applyQuickRange("month")}
-            className={activeRange === "month" ? "btn-active" : "btn-outline"}
-          >
-            Month
-          </button>
+    for (const collection of collections) {
+        if (Array.isArray(collection)) {
+            collection.forEach(normaliseItem);
+        } else if (collection && typeof collection === "object") {
+            Object.values(collection).forEach(normaliseItem);
+        }
+    }
 
-          <span className="text-sm text-zinc-500">
-            Use custom range only when you need older or specific data.
-          </span>
-        </div>
+    const directItem = data.item_id ?? data.itemId ?? data.itemid ?? null;
 
-        <form onSubmit={applyDateRange} className="flex flex-wrap items-end gap-4">
-          <InputDate label="Custom start" value={startDate} set={setStartDate} />
-          <InputDate label="Custom end" value={endDate} set={setEndDate} />
+    if (directItem !== null && directItem !== undefined) {
+        const itemId = String(directItem);
 
-          <button className="btn">Apply Custom Range</button>
-        </form>
-      </div>
+        addItem(found, {
+            itemId,
+            itemName: resolveItemName(
+                itemId,
+                data.item_name ?? data.name ?? null,
+                itemNameMap
+            ),
+            quantity: Number(data.quantity ?? data.qty ?? 1),
+        });
+    }
 
-      <div className="mb-10 grid grid-cols-5 gap-6">
-        <Card title="Networth" value={formatMoney(data.currentNetworth)} />
-        <Card title="Trade Income" value={formatMoney(financials.tradeIncome)} />
-        <Card title="Travel Spend" value={formatMoney(financials.travelCost)} />
-        <Card title="Travel Profit" value={formatMoney(financials.travelNet)} />
-        <Card
-          title="Trades"
-          value={(counts.tradeActivities ?? 0).toLocaleString()}
-        />
-      </div>
-    </main>
-  );
+    return found;
+}
+
+function getTradeKey(activity: any) {
+    const raw = activity.rawData ?? {};
+
+    const possible =
+        raw.trade_id ??
+        raw.trade ??
+        raw.tradeId ??
+        raw.tradeID ??
+        raw.trade_key ??
+        activity.tradeId ??
+        null;
+
+    if (possible) {
+        const text = String(possible);
+
+        if (!text.startsWith(`${activity.logType}-`)) {
+            return text;
+        }
+    }
+
+    const day = activity.activityDate?.slice(0, 10) ?? "unknown-day";
+    const trader =
+        activity.traderId ??
+        activity.traderName ??
+        raw.user ??
+        raw.user_id ??
+        raw.target ??
+        raw.target_id ??
+        "unknown-trader";
+
+    return `${day}-${trader}`;
+}
+
+function getTradeName(activity: any) {
+    const raw = activity.rawData ?? {};
+
+    const possible =
+        raw.trade_name ??
+        raw.tradeName ??
+        raw.name ??
+        raw.title ??
+        raw.description ??
+        raw.message ??
+        activity.description ??
+        null;
+
+    if (!possible) return null;
+
+    const text = String(possible);
+
+    if (
+        [
+            "Trade completed",
+            "Trade accepted",
+            "Trade money incoming",
+            "Trade items outgoing",
+            "Trade items incoming",
+            "Trade initiate outgoing",
+        ].includes(text)
+    ) {
+        return null;
+    }
+
+    return text;
+}
+
+function groupTrades(activities: any[], itemNameMap: Map<string, string>) {
+    const groups = new Map<string, TradeGroup>();
+
+    for (const activity of activities) {
+        const key = getTradeKey(activity);
+
+        if (!groups.has(key)) {
+            groups.set(key, {
+                groupKey: key,
+                lastDate: activity.activityDate,
+                traderName: activity.traderName ?? null,
+                traderId: activity.traderId ?? null,
+                tradeName: getTradeName(activity),
+                status: activity.tradeStatus ?? "UNKNOWN",
+                moneyReceived: 0,
+                itemsSent: [],
+            });
+        }
+
+        const group = groups.get(key)!;
+
+        if (activity.activityDate > group.lastDate) {
+            group.lastDate = activity.activityDate;
+        }
+
+        if (!group.traderName && activity.traderName) {
+            group.traderName = activity.traderName;
+        }
+
+        if (!group.traderId && activity.traderId) {
+            group.traderId = activity.traderId;
+        }
+
+        if (!group.tradeName && getTradeName(activity)) {
+            group.tradeName = getTradeName(activity);
+        }
+
+        if (activity.tradeStatus === "COMPLETED") {
+            group.status = "COMPLETED";
+        } else if (
+            activity.tradeStatus === "ACCEPTED" &&
+            group.status !== "COMPLETED"
+        ) {
+            group.status = "ACCEPTED";
+        } else if (
+            activity.tradeStatus === "MONEY_INCOMING" &&
+            !["COMPLETED", "ACCEPTED"].includes(group.status)
+        ) {
+            group.status = "PAID";
+        }
+
+        if (activity.tradeStatus === "MONEY_INCOMING" && activity.amount) {
+            group.moneyReceived += Number(activity.amount ?? 0);
+        }
+
+        if (activity.tradeStatus === "ITEMS_OUTGOING") {
+            const items = extractItems(activity.rawData, itemNameMap);
+            for (const item of items) addItem(group.itemsSent, item);
+        }
+    }
+
+    return Array.from(groups.values()).sort((a, b) =>
+        b.lastDate.localeCompare(a.lastDate)
+    );
+}
+
+function renderItems(items: TradeItem[]) {
+    if (items.length === 0) return "-";
+
+    return items
+        .map((item) => {
+            const name = item.itemName ?? `Item ${item.itemId}`;
+            return `${item.quantity.toLocaleString("en-US")} � ${name}`;
+        })
+        .join(", ");
+}
+
+function buildItemPerformance(
+    purchases: any[],
+    groupedTrades: TradeGroup[],
+    itemNameMap: Map<string, string>
+) {
+    const performance = new Map<string, ItemPerformance>();
+
+    function ensureItem(itemId: string) {
+        if (!performance.has(itemId)) {
+            performance.set(itemId, {
+                itemId,
+                itemName: resolveItemName(itemId, null, itemNameMap),
+                country: null,
+                boughtQty: 0,
+                boughtCost: 0,
+                soldQty: 0,
+                soldIncome: 0,
+                avgBuyPrice: 0,
+                avgSellPrice: 0,
+                estimatedProfit: 0,
+                roiPercent: 0,
+                profitPerUnit: 0,
+            });
+        }
+
+        return performance.get(itemId)!;
+    }
+
+    for (const purchase of purchases) {
+        const itemId = String(purchase.itemId);
+        const item = ensureItem(itemId);
+
+        item.itemName = resolveItemName(itemId, purchase.itemName, itemNameMap);
+        item.boughtQty += Number(purchase.quantity ?? 0);
+        item.boughtCost += Number(purchase.totalCost ?? 0);
+
+        if (!item.country && purchase.country) {
+            item.country = purchase.country;
+        }
+    }
+
+    for (const trade of groupedTrades) {
+        const totalItemsInTrade = trade.itemsSent.reduce(
+            (sum, item) => sum + Number(item.quantity ?? 0),
+            0
+        );
+
+        if (totalItemsInTrade <= 0 || trade.moneyReceived <= 0) continue;
+
+        for (const soldItem of trade.itemsSent) {
+            const item = ensureItem(String(soldItem.itemId));
+            const itemQty = Number(soldItem.quantity ?? 0);
+            const incomeShare = Math.round(
+                (itemQty / totalItemsInTrade) * trade.moneyReceived
+            );
+
+            item.itemName = resolveItemName(
+                soldItem.itemId,
+                soldItem.itemName,
+                itemNameMap
+            );
+            item.soldQty += itemQty;
+            item.soldIncome += incomeShare;
+        }
+    }
+
+    for (const item of performance.values()) {
+        item.avgBuyPrice =
+            item.boughtQty > 0 ? Math.round(item.boughtCost / item.boughtQty) : 0;
+
+        item.avgSellPrice =
+            item.soldQty > 0 ? Math.round(item.soldIncome / item.soldQty) : 0;
+
+        const estimatedSoldCost = item.avgBuyPrice * item.soldQty;
+
+        item.estimatedProfit = item.soldIncome - estimatedSoldCost;
+
+        item.roiPercent =
+            estimatedSoldCost > 0
+                ? (item.estimatedProfit / estimatedSoldCost) * 100
+                : 0;
+
+        item.profitPerUnit =
+            item.soldQty > 0 ? Math.round(item.estimatedProfit / item.soldQty) : 0;
+    }
+
+    return Array.from(performance.values()).sort(
+        (a, b) => b.estimatedProfit - a.estimatedProfit
+    );
+}
+
+export default async function DashboardPage({ searchParams }: PageProps) {
+    const params = await searchParams;
+
+    const selectedDate = isValidDate(params?.date) ? params!.date! : todayString();
+    const selectedRange = getRangeMode(params?.range);
+
+    const { startDate, endDate } = getDateRange(selectedDate, selectedRange);
+    const queryString = buildQueryString(selectedDate, selectedRange);
+    const startEndQueryString = buildStartEndQueryString(startDate, endDate);
+
+    const user = await getCurrentAppUser();
+
+    if (!user?.apiKey) {
+        return (
+            <main className="min-h-screen bg-zinc-950 p-10 text-white">
+                <h1 className="text-3xl font-bold">Torn Ops Intelligence</h1>
+                <p className="mt-3 text-zinc-400">
+                    Please configure your Torn API key first.
+                </p>
+
+                <Link
+                    href="/settings"
+                    className="mt-6 inline-block rounded-lg bg-emerald-600 px-6 py-3 font-semibold"
+                >
+                    Open Settings
+                </Link>
+            </main>
+        );
+    }
+
+    const [itemNameMap, purchases, tradeActivities, tradeIncomes, syncState] =
+        await Promise.all([
+            getItemNameMap(user.apiKey),
+
+            prisma.travelPurchase.findMany({
+                where: buildDateRangeWhere(user.id, "purchaseDate", startDate, endDate),
+                orderBy: {
+                    purchaseDate: "asc",
+                },
+            }),
+
+            prisma.tradeActivity.findMany({
+                where: buildDateRangeWhere(user.id, "activityDate", startDate, endDate),
+                orderBy: {
+                    activityDate: "asc",
+                },
+            }),
+
+            prisma.tradeIncome.findMany({
+                where: buildDateRangeWhere(user.id, "incomeDate", startDate, endDate),
+                orderBy: {
+                    incomeDate: "asc",
+                },
+            }),
+
+            getOrCreateSyncState(user.id),
+        ]);
+
+    const groupedTrades = groupTrades(tradeActivities, itemNameMap);
+
+    const traderIds = groupedTrades
+        .map((trade) => trade.traderId)
+        .filter(Boolean) as string[];
+
+    const playerNameMap = await getPlayerNameMap(user.apiKey, traderIds);
+
+    const itemPerformance = buildItemPerformance(
+        purchases,
+        groupedTrades,
+        itemNameMap
+    );
+
+    const travelSpend = purchases.reduce(
+        (sum, purchase) => sum + Number(purchase.totalCost ?? 0),
+        0
+    );
+
+    const travelItemsBought = purchases.reduce(
+        (sum, purchase) => sum + Number(purchase.quantity ?? 0),
+        0
+    );
+
+    const tradeMoneyReceived = tradeIncomes.reduce(
+        (sum, income) => sum + Number(income.amount ?? 0),
+        0
+    );
+
+    const tradeItemsSent = groupedTrades.reduce(
+        (sum, trade) =>
+            sum +
+            trade.itemsSent.reduce(
+                (itemSum, item) => itemSum + Number(item.quantity ?? 0),
+                0
+            ),
+        0
+    );
+
+    const netCashFlow = tradeMoneyReceived - travelSpend;
+
+    const bestTrade = [...groupedTrades].sort(
+        (a, b) => b.moneyReceived - a.moneyReceived
+    )[0];
+
+    const estimatedCostOfSoldItems = itemPerformance.reduce(
+        (sum, item) => sum + item.avgBuyPrice * item.soldQty,
+        0
+    );
+
+    const estimatedTradingProfit = tradeMoneyReceived - estimatedCostOfSoldItems;
+
+    const estimatedTradingRoi =
+        estimatedCostOfSoldItems > 0
+            ? (estimatedTradingProfit / estimatedCostOfSoldItems) * 100
+            : 0;
+
+    const bestItem = itemPerformance.find((item) => item.soldQty > 0);
+
+    return (
+        <main className="min-h-screen bg-zinc-950 p-10 text-white">
+            <div className="mb-8 flex items-start justify-between gap-6">
+                <div>
+                    <h1 className="text-3xl font-bold">Torn Ops Intelligence</h1>
+                    <p className="mt-1 text-sm text-zinc-400">
+                        Player: {user.playerName ?? "Current player"}
+                    </p>
+                    <p className="mt-1 text-xs text-zinc-500">
+                        Activity Log: {startDate} to {endDate}
+                    </p>
+                </div>
+
+                <div className="flex flex-wrap justify-end gap-3">
+                    <Link
+                        href="/test-api"
+                        className="rounded-lg bg-emerald-600 px-5 py-2 text-sm font-semibold hover:bg-emerald-500"
+                    >
+                        Latest Update
+                    </Link>
+
+                    <Link
+                        href={`/travel-purchases${startEndQueryString}`}
+                        className="rounded-lg border border-zinc-700 px-5 py-2 text-sm font-semibold hover:bg-zinc-900"
+                    >
+                        Travel
+                    </Link>
+
+                    <Link
+                        href={`/trades${startEndQueryString}`}
+                        className="rounded-lg border border-zinc-700 px-5 py-2 text-sm font-semibold hover:bg-zinc-900"
+                    >
+                        Trades
+                    </Link>
+
+                    <Link
+                        href={`/trade-intelligence${startEndQueryString}`}
+                        className="rounded-lg border border-zinc-700 px-5 py-2 text-sm font-semibold hover:bg-zinc-900"
+                    >
+                        Trade Intelligence
+                    </Link>
+
+                    <Link
+                        href="/settings"
+                        className="rounded-lg border border-zinc-700 px-5 py-2 text-sm font-semibold hover:bg-zinc-900"
+                    >
+                        Settings
+                    </Link>
+                </div>
+            </div>
+
+            <div className="mb-8 grid gap-6 md:grid-cols-4">
+                <Card
+                    title="Data From"
+                    value={syncState.backfillFromDate ? cleanDate(String(syncState.backfillFromDate)) : "-"}
+                    sub={`Status: ${syncState.backfillComplete ? "Complete" : "Not Complete"
+                        }`}
+                />
+
+                <Card
+                    title="Latest Update"
+                    value={getAgeText(syncState.lastLatestUpdateAt)}
+                    sub={
+                        syncState.lastLatestUpdateAt
+                            ? `Last: ${new Date(syncState.lastLatestUpdateAt).toLocaleString()}`
+                            : "Last: Never"
+                    }
+                />
+
+                <Card
+                    title="Backfill Logs"
+                    value={(syncState.backfillScannedLogs ?? 0).toLocaleString("en-US")}
+                />
+
+                <Card
+                    title="Latest Logs"
+                    value={(syncState.latestScannedLogs ?? 0).toLocaleString("en-US")}
+                />
+            </div>
+
+            <form
+                method="GET"
+                action="/"
+                className="mb-8 rounded-xl bg-zinc-900 p-5"
+            >
+                <div className="flex flex-wrap items-end gap-4">
+                    <div>
+                        <label className="mb-2 block text-sm text-zinc-400">
+                            End date
+                        </label>
+                        <input
+                            type="date"
+                            name="date"
+                            defaultValue={selectedDate}
+                            className="rounded-lg border border-zinc-700 bg-black px-4 py-3 text-white"
+                        />
+                    </div>
+
+                    <button
+                        type="submit"
+                        name="range"
+                        value="day"
+                        className={
+                            selectedRange === "day"
+                                ? "rounded-lg bg-emerald-600 px-5 py-3 text-sm font-semibold hover:bg-emerald-500"
+                                : "rounded-lg border border-zinc-700 px-5 py-3 text-sm font-semibold hover:bg-zinc-800"
+                        }
+                    >
+                        View Day
+                    </button>
+
+                    <button
+                        type="submit"
+                        name="range"
+                        value="week"
+                        className={
+                            selectedRange === "week"
+                                ? "rounded-lg bg-emerald-600 px-5 py-3 text-sm font-semibold hover:bg-emerald-500"
+                                : "rounded-lg border border-zinc-700 px-5 py-3 text-sm font-semibold hover:bg-zinc-800"
+                        }
+                    >
+                        View Week
+                    </button>
+
+                    <button
+                        type="submit"
+                        name="range"
+                        value="month"
+                        className={
+                            selectedRange === "month"
+                                ? "rounded-lg bg-emerald-600 px-5 py-3 text-sm font-semibold hover:bg-emerald-500"
+                                : "rounded-lg border border-zinc-700 px-5 py-3 text-sm font-semibold hover:bg-zinc-800"
+                        }
+                    >
+                        View Month
+                    </button>
+                </div>
+            </form>
+
+            <div className="mb-8 grid gap-6 md:grid-cols-5">
+                <MetricCard title="Travel Spend" value={`-${money(travelSpend)}`} negative />
+                <MetricCard title="Trade Money Received" value={money(tradeMoneyReceived)} positive />
+                <MetricCard title="Net Cash Flow" value={money(netCashFlow)} positive={netCashFlow >= 0} />
+                <MetricCard title="Est. Trading Profit" value={money(estimatedTradingProfit)} positive={estimatedTradingProfit >= 0} />
+                <MetricCard title="Est. ROI" value={percent(estimatedTradingRoi)} positive={estimatedTradingRoi >= 0} />
+            </div>
+
+            <div className="mb-8 grid gap-6 md:grid-cols-4">
+                <Card
+                    title="Items Bought"
+                    value={travelItemsBought.toLocaleString("en-US")}
+                />
+
+                <Card
+                    title="Items Sold / Sent"
+                    value={tradeItemsSent.toLocaleString("en-US")}
+                />
+
+                <Card
+                    title="Best Trade"
+                    value={
+                        bestTrade
+                            ? `${resolvePlayerName(
+                                bestTrade.traderId,
+                                bestTrade.traderName,
+                                playerNameMap
+                            )} � ${money(bestTrade.moneyReceived)}`
+                            : "-"
+                    }
+                />
+
+                <Card
+                    title="Best Item"
+                    value={
+                        bestItem
+                            ? `${bestItem.itemName} � ${money(bestItem.estimatedProfit)}`
+                            : "-"
+                    }
+                />
+            </div>
+
+            <div className="mb-8 overflow-hidden rounded-xl bg-zinc-900">
+                <div className="border-b border-zinc-800 p-5">
+                    <h2 className="text-xl font-semibold">Item Performance</h2>
+                    <p className="mt-1 text-sm text-zinc-400">
+                        Estimated profit uses the selected range&apos;s average buy price
+                        against sold quantity.
+                    </p>
+                </div>
+
+                <table className="w-full text-sm">
+                    <thead className="bg-zinc-800 text-zinc-400">
+                        <tr>
+                            <th className="p-3 text-left">Item</th>
+                            <th className="p-3 text-left">Country</th>
+                            <th className="p-3 text-left">Bought Qty</th>
+                            <th className="p-3 text-left">Avg Buy</th>
+                            <th className="p-3 text-left">Sold Qty</th>
+                            <th className="p-3 text-left">Avg Sell</th>
+                            <th className="p-3 text-left">Est. Profit</th>
+                            <th className="p-3 text-left">Profit / Unit</th>
+                            <th className="p-3 text-left">ROI</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {itemPerformance.map((item) => (
+                            <tr key={item.itemId} className="border-t border-zinc-800">
+                                <td className="p-3">{item.itemName}</td>
+                                <td className="p-3">{item.country ?? "-"}</td>
+                                <td className="p-3">{item.boughtQty.toLocaleString("en-US")}</td>
+                                <td className="p-3">
+                                    {item.avgBuyPrice ? money(item.avgBuyPrice) : "-"}
+                                </td>
+                                <td className="p-3">{item.soldQty.toLocaleString("en-US")}</td>
+                                <td className="p-3">
+                                    {item.avgSellPrice ? money(item.avgSellPrice) : "-"}
+                                </td>
+                                <td
+                                    className={`p-3 ${item.estimatedProfit >= 0
+                                        ? "text-emerald-400"
+                                        : "text-red-400"
+                                        }`}
+                                >
+                                    {money(item.estimatedProfit)}
+                                </td>
+                                <td
+                                    className={`p-3 ${item.profitPerUnit >= 0
+                                        ? "text-emerald-400"
+                                        : "text-red-400"
+                                        }`}
+                                >
+                                    {item.profitPerUnit ? money(item.profitPerUnit) : "-"}
+                                </td>
+                                <td
+                                    className={`p-3 ${item.roiPercent >= 0 ? "text-emerald-400" : "text-red-400"
+                                        }`}
+                                >
+                                    {percent(item.roiPercent)}
+                                </td>
+                            </tr>
+                        ))}
+
+                        {itemPerformance.length === 0 && (
+                            <tr>
+                                <td colSpan={9} className="p-8 text-center text-zinc-400">
+                                    No item performance data for this range.
+                                </td>
+                            </tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+
+            <div className="mb-8 overflow-hidden rounded-xl bg-zinc-900">
+                <div className="border-b border-zinc-800 p-5">
+                    <h2 className="text-xl font-semibold">Travel Purchases</h2>
+                </div>
+
+                <table className="w-full text-sm">
+                    <thead className="bg-zinc-800 text-zinc-400">
+                        <tr>
+                            <th className="p-3 text-left">Time</th>
+                            <th className="p-3 text-left">Country</th>
+                            <th className="p-3 text-left">Bought</th>
+                            <th className="p-3 text-left">Qty</th>
+                            <th className="p-3 text-left">Unit Cost</th>
+                            <th className="p-3 text-left">Total Cost</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {purchases.map((purchase) => {
+                            const itemName = resolveItemName(
+                                purchase.itemId,
+                                purchase.itemName,
+                                itemNameMap
+                            );
+
+                            return (
+                                <tr key={purchase.id} className="border-t border-zinc-800">
+                                    <td className="p-3">{cleanDateTime(purchase.purchaseDate)}</td>
+                                    <td className="p-3">{purchase.country ?? "-"}</td>
+                                    <td className="p-3">{itemName}</td>
+                                    <td className="p-3">{purchase.quantity}</td>
+                                    <td className="p-3">{money(purchase.unitPrice)}</td>
+                                    <td className="p-3 text-red-400">
+                                        -{money(purchase.totalCost)}
+                                    </td>
+                                </tr>
+                            );
+                        })}
+
+                        {purchases.length === 0 && (
+                            <tr>
+                                <td colSpan={6} className="p-8 text-center text-zinc-400">
+                                    No travel purchases for this range.
+                                </td>
+                            </tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+
+            <div className="overflow-hidden rounded-xl bg-zinc-900">
+                <div className="border-b border-zinc-800 p-5">
+                    <h2 className="text-xl font-semibold">Trades</h2>
+                </div>
+
+                <table className="w-full text-sm">
+                    <thead className="bg-zinc-800 text-zinc-400">
+                        <tr>
+                            <th className="p-3 text-left">Time</th>
+                            <th className="p-3 text-left">Trader</th>
+                            <th className="p-3 text-left">Trade</th>
+                            <th className="p-3 text-left">Status</th>
+                            <th className="p-3 text-left">Items Sold / Sent</th>
+                            <th className="p-3 text-left">Money Received</th>
+                            <th className="p-3 text-left">Avg / Item</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {groupedTrades.map((trade) => {
+                            const totalItems = trade.itemsSent.reduce(
+                                (sum, item) => sum + item.quantity,
+                                0
+                            );
+
+                            const avg =
+                                totalItems > 0 && trade.moneyReceived > 0
+                                    ? Math.round(trade.moneyReceived / totalItems)
+                                    : null;
+
+                            const traderName = resolvePlayerName(
+                                trade.traderId,
+                                trade.traderName,
+                                playerNameMap
+                            );
+
+                            return (
+                                <tr
+                                    key={trade.groupKey}
+                                    className="border-t border-zinc-800 align-top"
+                                >
+                                    <td className="p-3">{cleanDateTime(trade.lastDate)}</td>
+                                    <td className="p-3">{traderName}</td>
+                                    <td className="p-3">{trade.tradeName ?? trade.groupKey}</td>
+                                    <td className="p-3">{trade.status}</td>
+                                    <td className="max-w-md p-3 text-zinc-300">
+                                        {renderItems(trade.itemsSent)}
+                                    </td>
+                                    <td className="p-3 text-emerald-400">
+                                        {trade.moneyReceived > 0 ? money(trade.moneyReceived) : "-"}
+                                    </td>
+                                    <td className="p-3">{avg ? money(avg) : "-"}</td>
+                                </tr>
+                            );
+                        })}
+
+                        {groupedTrades.length === 0 && (
+                            <tr>
+                                <td colSpan={7} className="p-8 text-center text-zinc-400">
+                                    No trades for this range.
+                                </td>
+                            </tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+        </main>
+    );
 }
 
 function Card({
-  title,
-  value,
-  sub,
+    title,
+    value,
+    sub,
 }: {
-  title: string;
-  value: any;
-  sub?: string;
+    title: string;
+    value: string;
+    sub?: string;
 }) {
-  return (
-    <div className="rounded-xl bg-zinc-900 p-5">
-      <p className="text-sm text-zinc-400">{title}</p>
-      <p className="mt-1 text-lg font-bold">{value}</p>
-      {sub && <p className="mt-1 text-xs text-zinc-500">{sub}</p>}
-    </div>
-  );
+    return (
+        <div className="rounded-xl bg-zinc-900 p-5">
+            <p className="text-sm text-zinc-400">{title}</p>
+            <p className="mt-1 text-lg font-bold">{value}</p>
+            {sub && <p className="mt-1 text-xs text-zinc-500">{sub}</p>}
+        </div>
+    );
 }
 
-function InputDate({
-  label,
-  value,
-  set,
+function MetricCard({
+    title,
+    value,
+    positive,
+    negative,
 }: {
-  label: string;
-  value: string;
-  set: (v: string) => void;
+    title: string;
+    value: string;
+    positive?: boolean;
+    negative?: boolean;
 }) {
-  return (
-    <div>
-      <label className="mb-1 block text-sm text-zinc-400">{label}</label>
-      <input
-        type="date"
-        value={value}
-        onChange={(e) => set(e.target.value)}
-        className="rounded-lg border border-zinc-700 bg-black px-3 py-2 text-white"
-      />
-    </div>
-  );
+    const colourClass = negative
+        ? "text-red-400"
+        : positive
+            ? "text-emerald-400"
+            : "";
+
+    return (
+        <div className="rounded-xl bg-zinc-900 p-6">
+            <p className="text-sm text-zinc-400">{title}</p>
+            <p className={`mt-2 text-2xl font-bold ${colourClass}`}>{value}</p>
+        </div>
+    );
 }
