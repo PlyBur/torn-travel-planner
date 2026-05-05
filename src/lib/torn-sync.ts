@@ -246,14 +246,20 @@ async function saveTravelPurchase(userId: string, key: string, log: TornLog) {
 
   return prisma.travelPurchase.upsert({
     where: { userId_sourceLogKey: { userId, sourceLogKey } },
-    update: {
-      purchaseDate: getISODate(log.timestamp),
-      country: getCountryFromArea(data.area),
-      itemId,
-      quantity,
-      unitPrice,
-      totalCost,
-    },
+      update: {
+          purchaseDate: getISODate(log.timestamp),
+          country: getCountryFromArea(data.area),
+          itemId,
+          quantity,
+          unitPrice,
+          totalCost,
+          notes: JSON.stringify({
+              debug: true,
+              rawData: data,
+              area: data.area,
+              mappedCountry: getCountryFromArea(data.area),
+          }),
+      },
     create: {
       user: { connect: { id: userId } },
       purchaseDate: getISODate(log.timestamp),
@@ -266,7 +272,12 @@ async function saveTravelPurchase(userId: string, key: string, log: TornLog) {
       totalCost,
       source: "API_LOG",
       sourceLogKey,
-      notes: null,
+      notes: JSON.stringify({
+            debug: true,
+            rawData: data,
+            area: data.area,
+            mappedCountry: getCountryFromArea(data.area),
+        }),
     },
   });
 }
