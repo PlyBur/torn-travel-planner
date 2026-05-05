@@ -248,8 +248,9 @@ async function saveTravelPurchase(userId: string, key: string, log: TornLog) {
     where: { userId_sourceLogKey: { userId, sourceLogKey } },
       update: {
           purchaseDate: getISODate(log.timestamp),
-          country: getCountryFromArea(data.area),
-          itemId,
+          country:
+              data.country ||
+              getCountryFromArea(data.travel_area ?? data.area),          itemId,
           quantity,
           unitPrice,
           totalCost,
