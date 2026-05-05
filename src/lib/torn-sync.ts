@@ -354,7 +354,15 @@ async function syncLogType(options: {
   let scannedLogs = 0;
   let savedRecords = 0;
 
-  for (const [key, log] of entries) {
+    for (const [key, log] of entries) {
+            console.log("TORN LOG RAW", {
+                key,
+                requestedLogType: options.logType,
+                timestamp: log.timestamp,
+                category: log.category,
+                title: log.title,
+                data: log.data,
+            });
     if (!log.timestamp) continue;
     if (log.timestamp < options.fromUnix) continue;
     if (log.timestamp > options.toUnix) continue;
