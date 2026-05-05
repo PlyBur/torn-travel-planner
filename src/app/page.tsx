@@ -883,7 +883,9 @@ export default async function DashboardPage({ searchParams }: PageProps) {
                             return (
                                 <tr key={purchase.id} className="border-t border-zinc-800">
                                     <td className="p-3">{cleanDateTime(purchase.purchaseDate)}</td>
-                                    <td className="p-3">{purchase.country ?? "-"}</td>
+                                    <td className="p-3 text-zinc-500">
+                                        Still in development
+                                    </td>
                                     <td className="p-3">{itemName}</td>
                                     <td className="p-3">{purchase.quantity}</td>
                                     <td className="p-3">{money(purchase.unitPrice)}</td>
