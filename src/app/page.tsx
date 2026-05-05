@@ -1,6 +1,9 @@
+import LatestUpdateButton from "@/components/latest-update-button";
+import LatestUpdateAge from "@/components/latest-update-age";
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getCurrentAppUser, getOrCreateSyncState } from "@/lib/current-user";
+import type { ReactNode } from "react";
 import {
     getItemNameMap,
     getPlayerNameMap,
@@ -612,12 +615,7 @@ export default async function DashboardPage({ searchParams }: PageProps) {
                 </div>
 
                 <div className="flex flex-wrap justify-end gap-3">
-                    <Link
-                        href="/test-api"
-                        className="rounded-lg bg-emerald-600 px-5 py-2 text-sm font-semibold hover:bg-emerald-500"
-                    >
-                        Latest Update
-                    </Link>
+                    <LatestUpdateButton />
 
                     <Link
                         href={`/travel-purchases${startEndQueryString}`}
@@ -659,7 +657,10 @@ export default async function DashboardPage({ searchParams }: PageProps) {
 
                 <Card
                     title="Latest Update"
-                    value={getAgeText(syncState.lastLatestUpdateAt)}
+                    value={
+                        <LatestUpdateAge lastUpdated={syncState.lastLatestUpdateAt} />
+                    }
+
                     sub={
                         syncState.lastLatestUpdateAt
                             ? `Last: ${new Date(syncState.lastLatestUpdateAt).toLocaleString()}`
@@ -978,7 +979,7 @@ function Card({
     sub,
 }: {
     title: string;
-    value: string;
+    value: React.ReactNode;
     sub?: string;
 }) {
     return (
