@@ -40,7 +40,7 @@ type TradeGroup = {
 type ItemPerformance = {
     itemId: string;
     itemName: string;
-    country: string | null;
+    countries: Set<string>;
     boughtQty: number;
     boughtCost: number;
     soldQty: number;
@@ -405,7 +405,7 @@ function buildItemPerformance(
             performance.set(itemId, {
                 itemId,
                 itemName: resolveItemName(itemId, null, itemNameMap),
-                country: null,
+                countries: new Set<string>(),
                 boughtQty: 0,
                 boughtCost: 0,
                 soldQty: 0,
@@ -429,8 +429,8 @@ function buildItemPerformance(
         item.boughtQty += Number(purchase.quantity ?? 0);
         item.boughtCost += Number(purchase.totalCost ?? 0);
 
-        if (!item.country && purchase.country) {
-            item.country = purchase.country;
+        if (purchase.country) {
+            item.countries.add(purchase.country);
         }
     }
 
@@ -521,7 +521,7 @@ export default async function DashboardPage({ searchParams }: PageProps) {
             prisma.travelPurchase.findMany({
                 where: buildDateRangeWhere(user.id, "purchaseDate", startDate, endDate),
                 orderBy: {
-                    purchaseDate: "asc",
+                    purchaseDate: "desc",
                 },
             }),
 
@@ -808,7 +808,9 @@ export default async function DashboardPage({ searchParams }: PageProps) {
                         {itemPerformance.map((item) => (
                             <tr key={item.itemId} className="border-t border-zinc-800">
                                 <td className="p-3">{item.itemName}</td>
-                                <td className="p-3">{item.country ?? "-"}</td>
+                                <td className="p-3">
+                                    {item.countries.size > 0 ? Array.from(item.countries).join(", ") : "-"}
+                                </td>
                                 <td className="p-3">{item.boughtQty.toLocaleString("en-US")}</td>
                                 <td className="p-3">
                                     {item.avgBuyPrice ? money(item.avgBuyPrice) : "-"}
