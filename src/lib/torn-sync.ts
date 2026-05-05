@@ -220,7 +220,20 @@ async function fetchFilteredLogs(apiKey: string, logType: number, from: number) 
 }
 
 async function saveTravelPurchase(userId: string, key: string, log: TornLog) {
-  const data = log.data ?? {};
+    const data = log.data ?? {};
+
+    console.log("TRAVEL PURCHASE DEBUG", {
+        key,
+        timestamp: log.timestamp,
+        title: log.title,
+        category: log.category,
+        data,
+        area: data.area,
+        travelArea: data.travel_area,
+        country: data.country,
+        location: data.location,
+        mappedFromArea: getCountryFromArea(data.area),
+    });
 
   const itemId = String(data.item ?? "");
   const quantity = Number(data.quantity ?? 0);
