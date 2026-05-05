@@ -808,8 +808,8 @@ export default async function DashboardPage({ searchParams }: PageProps) {
                         {itemPerformance.map((item) => (
                             <tr key={item.itemId} className="border-t border-zinc-800">
                                 <td className="p-3">{item.itemName}</td>
-                                <td className="p-3">
-                                    {item.countries.size > 0 ? Array.from(item.countries).join(", ") : "-"}
+                                <td className="p-3 text-zinc-500">
+                                    Still in development
                                 </td>
                                 <td className="p-3">{item.boughtQty.toLocaleString("en-US")}</td>
                                 <td className="p-3">
